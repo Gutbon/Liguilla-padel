@@ -30,7 +30,7 @@ td,th{padding:6px 4px;border-bottom:1px solid var(--border);text-align:left}
 .vteam{font-weight:600}
 .vs{color:var(--muted);font-size:12px;margin:0 4px}
 .loading{color:var(--muted);padding:40px 0;text-align:center}
-#debugPanel{position:fixed;bottom:0;left:0;right:0;max-height:40vh;overflow-y:auto;background:#0b0b0d;color:#9ef29e;font:11px/1.5 monospace;padding:8px 10px;border-top:2px solid var(--accent);z-index:9999}
+#debugPanel{display:none;position:fixed;bottom:0;left:0;right:0;max-height:40vh;overflow-y:auto;background:#0b0b0d;color:#9ef29e;font:11px/1.5 monospace;padding:8px 10px;border-top:2px solid var(--accent);z-index:9999}
 #debugPanel .err{color:#ff8a8a}
 #debugPanel b{color:#fff}
 </style>
@@ -50,6 +50,11 @@ function __log(msg, isErr){
 }
 window.addEventListener('error', e => __log('Error de script: '+(e.message||e), true));
 window.addEventListener('unhandledrejection', e => __log('Promesa rechazada: '+(e.reason&&e.reason.message?e.reason.message:e.reason), true));
+if(localStorage.getItem('padel_debug')==='1') document.getElementById('debugPanel').style.display='block';
+function toggleDebug(checked){
+  localStorage.setItem('padel_debug', checked?'1':'0');
+  document.getElementById('debugPanel').style.display = checked ? 'block' : 'none';
+}
 __log('HTML cargado, arrancando script…');
 </script>
 <script type="module">
@@ -230,6 +235,13 @@ function render(){
     <button onclick="lanzarLiguilla()" ${Object.keys(teams).length<2?'disabled':''}>Lanzar liguilla</button>`;
   } else {
     html += `<p class="muted">La liguilla ya está lanzada.</p>`;
+  }
+  if(isAdmin){
+    const dbgOn=localStorage.getItem('padel_debug')==='1';
+    html += `<div class="row" style="margin-top:10px;border-top:1px solid var(--border);padding-top:10px">
+      <label class="muted" style="display:flex;align-items:center;gap:6px;cursor:pointer">
+        <input type="checkbox" id="debugToggle" ${dbgOn?'checked':''} onchange="toggleDebug(this.checked)"> Mostrar panel de depuración
+      </label></div>`;
   }
   html += `</div>`;
   if(isAdmin){
