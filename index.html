@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Liguilla de Pádel</title>
+<style>
+:root{--bg:#f6f7f8;--card:#fff;--text:#1a1d21;--muted:#6b7280;--border:#e5e7eb;--accent:#16a34a;--ink:#fff;--warn:#d97706;--danger:#dc2626}
+@media (prefers-color-scheme: dark){:root{--bg:#15171a;--card:#1f2227;--text:#eef0f2;--muted:#9aa2ad;--border:#30343a;--accent:#22c55e;--ink:#06250f}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:720px;margin:0 auto;padding:20px 16px 60px}
+h1{font-size:20px;margin:0 0 4px}
+h2{font-size:16px;margin:24px 0 10px}
+.muted{color:var(--muted);font-size:13px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:12px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+input{background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:8px 10px;font-size:14px;width:100%}
+button{background:var(--accent);color:var(--ink);border:none;border-radius:8px;padding:9px 14px;font-size:14px;font-weight:600;cursor:pointer}
+button.secondary{background:transparent;color:var(--text);border:1px solid var(--border)}
+button.small{padding:6px 10px;font-size:12px}
+button:disabled{opacity:.45}
+table{width:100%;border-collapse:collapse;font-size:13px}
+td,th{padding:6px 4px;border-bottom:1px solid var(--border);text-align:left}
+.badge{display:inline-block;font-size:11px;padding:2px 8px;border-radius:999px;background:var(--bg);border:1px solid var(--border);color:var(--muted)}
+.badge.ok{color:var(--accent);border-color:var(--accent)}
+.badge.warn{color:var(--warn);border-color:var(--warn)}
+.match{border-left:3px solid var(--border);padding-left:10px;margin-bottom:10px}
+.match.mine{border-left-color:var(--accent)}
+.vteam{font-weight:600}
+.vs{color:var(--muted);font-size:12px;margin:0 4px}
+.loading{color:var(--muted);padding:40px 0;text-align:center}
+</style>
+</head>
+<body>
+<div class="wrap" id="app"><div class="loading">Cargando…</div></div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getFirestore, doc, setDoc, updateDoc, onSnapshot, collection } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+
+// ⚠️ PEGA AQUÍ TU CONFIG DE FIREBASE (Configuración del proyecto > Tus apps > Web)
+const firebaseConfig = {
+  apiKey: "AIzaSyC3LfAgcreb_MNVdaWzOvrjUfIk05MRxt0",
+  authDomain: "padel-37110.firebaseapp.com",
+  projectId: "padel-37110",
+  storageBucket: "padel-37110.firebasestorage.app",
+  messagingSenderId: "216613664938",
+  appId: "1:216613664938:web:4be2e12a9c20f17f9238d3"
+};
+// ⚠️ Cambia este PIN antes de publicar. Cualquiera que lo sepa puede lanzar la liguilla.
+const ADMIN_PIN = "PADEL2026";
+
+const app = initializeApp(firebaseConfig);
+const dbase = getFirestore(app);
+const auth = getAuth(app);
+
+let myId=localStorage.getItem('padel_myid'), isAdmin=false;
+let players={}, teams={}, matches={}, config={phase:"registration", currentRound:0, totalRounds:0, schedule:null};
+let loaded={players:false,teams:false,matches:false,config:false};
+let lastError=null;
+
+function esc(s){ return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function showError(ctx,err){ console.error(ctx,err); lastError=ctx+': '+(err&&err.message?err.message:String(err)); render(); }
+
+signInAnonymously(auth).catch(err=>showError('No se pudo conectar',err));
+onAuthStateChanged(auth, async u=>{
+  if(!u) return;
+  onSnapshot(collection(dbase,"players"), snap=>{ players={}; snap.docs.forEach(d=>players[d.id]=d.data()); loaded.players=true; render(); }, err=>showError('Error leyendo jugadores',err));
+  onSnapshot(collection(dbase,"teams"), snap=>{ teams={}; snap.docs.forEach(d=>teams[d.id]=d.data()); loaded.teams=true; render(); }, err=>showError('Error leyendo equipos',err));
+  onSnapshot(collection(dbase,"matches"), snap=>{ matches={}; snap.docs.forEach(d=>matches[d.id]=d.data()); loaded.matches=true; render(); }, err=>showError('Error leyendo partidos',err));
+  onSnapshot(doc(dbase,"config/state"), d=>{ if(d && d.data()) config=d.data(); loaded.config=true; render(); }, err=>showError('Error leyendo config',err));
+  if(myId){
+    const nm=localStorage.getItem('padel_myname');
+    if(nm){ try{ await setDoc(doc(dbase,"players/"+myId), {name:nm}, {merge:true}); }catch(err){ showError('No se pudo sincronizar tu perfil',err); } }
+  }
+});
+function allLoaded(){ return loaded.players&&loaded.teams&&loaded.matches&&loaded.config; }
+
+function roundRobin(teamIds){
+  let list=teamIds.slice();
+  if(list.length%2!==0) list.push(null);
+  const n=list.length, rounds=[];
+  for(let r=0;r<n-1;r++){
+    const rm=[];
+    for(let i=0;i<n/2;i++){ const a=list[i], b=list[n-1-i]; if(a&&b) rm.push([a,b]); }
+    rounds.push(rm);
+    list.splice(1,0,list.pop());
+  }
+  return rounds;
+}
+
+async function entrarConNombre(name){
+  name=(name||'').trim(); if(!name) return;
+  const slug=name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'');
+  if(!slug){ alert('Pon un nombre válido'); return; }
+  myId=slug;
+  localStorage.setItem('padel_myid', slug);
+  localStorage.setItem('padel_myname', name);
+  try{ await setDoc(doc(dbase,"players/"+slug), {name}, {merge:true}); }
+  catch(err){ showError('No se pudo entrar',err); }
+  render();
+}
+function cerrarSesion(){
+  localStorage.removeItem('padel_myid'); localStorage.removeItem('padel_myname');
+  myId=null; isAdmin=false; render();
+}
+async function crearEquipo(name){
+  if(!name.trim()) return;
+  try{
+    const teamId="t_"+Math.random().toString(36).slice(2,9);
+    await setDoc(doc(dbase,"teams/"+teamId), {name:name.trim(), players:[myId]});
+    await updateDoc(doc(dbase,"players/"+myId), {teamId});
+  }catch(err){ showError('No se pudo crear el equipo',err); }
+}
+async function unirseEquipo(teamId){
+  const t=teams[teamId]; if(!t||t.players.length>=2) return;
+  try{
+    await updateDoc(doc(dbase,"teams/"+teamId), {players:[...t.players, myId]});
+    await updateDoc(doc(dbase,"players/"+myId), {teamId});
+  }catch(err){ showError('No se pudo unir al equipo',err); }
+}
+function adminLogin(){
+  const pin=prompt('PIN de admin:');
+  if(pin===null) return;
+  if(pin===ADMIN_PIN){ isAdmin=true; render(); } else alert('PIN incorrecto');
+}
+async function lanzarLiguilla(){
+  if(!isAdmin) return;
+  const teamIds=Object.keys(teams);
+  if(teamIds.length<2) return;
+  const schedule=roundRobin(teamIds);
+  try{
+    await setDoc(doc(dbase,"config/state"), {phase:"active", currentRound:0, totalRounds:schedule.length, schedule});
+    await crearPartidosRonda(schedule,0);
+  }catch(err){ showError('No se pudo lanzar la liguilla',err); }
+}
+async function crearPartidosRonda(schedule, roundIdx){
+  if(roundIdx>=schedule.length) return;
+  try{
+    await Promise.all(schedule[roundIdx].map(([a,b])=>
+      setDoc(doc(dbase,`matches/r${roundIdx}_${a}_${b}`), {round:roundIdx, teamA:a, teamB:b, proposal:null, votes:{}, confirmed:false, played:false, result:null})
+    ));
+  }catch(err){ showError('No se pudieron crear los partidos de la ronda',err); }
+}
+async function proponerFecha(matchId, date, time){
+  if(!date||!time) return;
+  try{ await updateDoc(doc(dbase,"matches/"+matchId), {proposal:{date,time}, votes:{[myId]:true}, confirmed:false}); }
+  catch(err){ showError('No se pudo proponer la fecha',err); }
+}
+async function votarOk(matchId, m){
+  try{
+    const votes={...m.votes,[myId]:true};
+    const pids=[...teams[m.teamA].players, ...teams[m.teamB].players];
+    const confirmed = pids.every(p=>votes[p]);
+    await updateDoc(doc(dbase,"matches/"+matchId), {votes, confirmed});
+  }catch(err){ showError('No se pudo votar',err); }
+}
+async function guardarResultado(matchId, m, sA, sB){
+  sA=parseInt(sA); sB=parseInt(sB);
+  if(isNaN(sA)||isNaN(sB)||sA===sB) return;
+  const winner = sA>sB? m.teamA : m.teamB;
+  try{
+    await updateDoc(doc(dbase,"matches/"+matchId), {played:true, result:{setsA:sA, setsB:sB, winner}});
+    await checkRondaCompleta();
+  }catch(err){ showError('No se pudo guardar el resultado',err); }
+}
+async function checkRondaCompleta(){
+  const cur=config.currentRound;
+  const roundMatches=Object.values(matches).filter(m=>m.round===cur);
+  const total=(config.schedule||[])[cur]?.length||0;
+  if(roundMatches.length>=total && roundMatches.every(m=>m.played)){
+    const next=cur+1;
+    try{
+      if(next<config.totalRounds){
+        await updateDoc(doc(dbase,"config/state"), {currentRound:next});
+        await crearPartidosRonda(config.schedule, next);
+      } else {
+        await updateDoc(doc(dbase,"config/state"), {phase:"finished"});
+      }
+    }catch(err){ showError('No se pudo avanzar de ronda',err); }
+  }
+}
+
+function standings(){
+  const rows=Object.keys(teams).map(id=>{
+    const t=teams[id];
+    const played=Object.values(matches).filter(m=>m.played&&(m.teamA===id||m.teamB===id));
+    const wins=played.filter(m=>m.result.winner===id).length;
+    return {id, name:t.name, pj:played.length, pg:wins, pp:played.length-wins};
+  });
+  rows.sort((a,b)=> b.pg-a.pg || a.pp-b.pp);
+  return rows;
+}
+function teamName(id){ return id && teams[id] ? teams[id].name : '—'; }
+
+function render(){
+  const app=document.getElementById('app');
+  if(!allLoaded()){ app.innerHTML='<div class="loading">Cargando…</div>'; return; }
+
+  let html = `<h1>🎾 Liguilla de Pádel</h1>`;
+  if(myId) html += `<p class="muted" style="margin:-2px 0 14px">Conectado como <b>${esc(localStorage.getItem('padel_myname')||myId)}</b> · <a href="#" onclick="cerrarSesion();return false;" style="color:var(--muted)">cambiar</a></p>`;
+  if(lastError) html += `<div class="card" style="border-color:var(--danger);color:var(--danger)">⚠️ ${esc(lastError)}</div>`;
+
+  if(config.phase==="registration"){
+    html += `<div class="card"><h2 style="margin-top:0">Panel de admin</h2>`;
+    if(!isAdmin){
+      html += `<button class="secondary" onclick="adminLogin()">Soy el admin</button>`;
+    } else {
+      html += `<p class="muted">${Object.keys(teams).length} equipos registrados.</p>
+      <button onclick="lanzarLiguilla()" ${Object.keys(teams).length<2?'disabled':''}>Lanzar liguilla</button>`;
+    }
+    html += `</div>`;
+  }
+
+  if(!myId){
+    html += `<p class="muted">Pon tu nombre para entrar en la liguilla (sin contraseña, solo para identificarte).</p>
+    <div class="card">
+      <div class="row"><input type="text" id="loginInput" placeholder="Tu nombre"></div>
+      <div style="margin-top:8px"><button onclick="entrarConNombre(document.getElementById('loginInput').value)">Entrar</button></div>
+    </div>`;
+    app.innerHTML=html; return;
+  }
+  const me=players[myId];
+  if(!me){ html += '<div class="loading">Preparando tu perfil…</div>'; app.innerHTML=html; return; }
+
+  if(!me.teamId){
+    const open=Object.entries(teams).filter(([id,t])=>t.players.length<2);
+    html += `<p class="muted">Hola ${esc(me.name)}. Crea un equipo o únete a uno existente.</p>
+    <div class="card">
+      <h2 style="margin-top:0">Crear equipo</h2>
+      <div class="row"><input type="text" id="teamInput" placeholder="Nombre del equipo"></div>
+      <div style="margin-top:8px"><button onclick="crearEquipo(document.getElementById('teamInput').value)">Crear</button></div>
+    </div>
+    <div class="card"><h2 style="margin-top:0">Unirse a un equipo</h2>`;
+    if(open.length===0) html += `<p class="muted">No hay equipos con hueco libre.</p>`;
+    open.forEach(([id,t])=>{
+      html += `<div class="row" style="justify-content:space-between;margin-bottom:6px">
+        <span>${esc(t.name)} <span class="badge">${t.players.length}/2</span></span>
+        <button class="small" onclick="unirseEquipo('${id}')">Unirme</button></div>`;
+    });
+    html += `</div>`;
+    app.innerHTML=html; return;
+  }
+
+  const myTid=me.teamId;
+  if(config.phase==="registration"){
+    html += `<div class="card"><p class="muted">Esperando a que el admin lance la liguilla. Tu equipo: <b>${esc(teamName(myTid))}</b></p></div>`;
+    app.innerHTML=html; return;
+  }
+
+  html += `<h2>Clasificación</h2><div class="card"><table><tr><th>Equipo</th><th>PJ</th><th>G</th><th>P</th></tr>`;
+  standings().forEach(r=>{ html += `<tr><td>${esc(r.name)}${r.id===myTid?' <span class="badge ok">tú</span>':''}</td><td>${r.pj}</td><td>${r.pg}</td><td>${r.pp}</td></tr>`; });
+  html += `</table></div>`;
+
+  html += `<h2>Ronda ${config.currentRound+1} de ${config.totalRounds}</h2>`;
+  const roundMatches=Object.entries(matches).filter(([id,m])=>m.round===config.currentRound);
+  if(roundMatches.length===0) html += `<div class="card muted">Generando partidos…</div>`;
+  roundMatches.forEach(([id,m])=>{
+    const mine = m.teamA===myTid || m.teamB===myTid;
+    html += `<div class="card match ${mine?'mine':''}">
+      <div class="row" style="justify-content:space-between">
+        <div><span class="vteam">${esc(teamName(m.teamA))}</span><span class="vs">vs</span><span class="vteam">${esc(teamName(m.teamB))}</span></div>
+        ${m.played?'<span class="badge ok">Jugado</span>': m.confirmed?'<span class="badge ok">Fecha confirmada</span>': m.proposal?'<span class="badge warn">Pendiente de votos</span>':'<span class="badge">Sin fecha</span>'}
+      </div>`;
+    if(m.played){
+      html += `<p class="muted">Resultado: ${m.result.setsA} - ${m.result.setsB} · Ganador: ${esc(teamName(m.result.winner))}</p>`;
+    } else if(mine){
+      if(!m.proposal){
+        html += `<div class="row" style="margin-top:8px">
+          <input type="date" id="d_${id}" style="max-width:150px">
+          <input type="time" id="h_${id}" style="max-width:110px">
+          <button class="small" onclick="proponerFecha('${id}', document.getElementById('d_${id}').value, document.getElementById('h_${id}').value)">Proponer fecha</button>
+        </div>`;
+      } else if(!m.confirmed){
+        html += `<p>Propuesta: <b>${m.proposal.date} ${m.proposal.time}</b></p>
+          <div class="row">
+          ${m.votes[myId]? '<span class="badge ok">Ya votaste OK</span>' : '<button class="small" onclick="votarOk(\''+id+'\', '+JSON.stringify(m).replace(/"/g,'&quot;')+')">Votar OK</button>'}
+          </div>
+          <div style="margin-top:8px"><button class="small secondary" onclick="document.getElementById('rep_${id}').style.display='flex'">Proponer otra fecha</button>
+          <div id="rep_${id}" class="row" style="display:none;margin-top:6px">
+            <input type="date" id="d2_${id}" style="max-width:150px">
+            <input type="time" id="h2_${id}" style="max-width:110px">
+            <button class="small" onclick="proponerFecha('${id}', document.getElementById('d2_${id}').value, document.getElementById('h2_${id}').value)">Reproponer</button>
+          </div></div>`;
+      } else {
+        html += `<p>Fecha: <b>${m.proposal.date} ${m.proposal.time}</b></p>
+          <div class="row" style="margin-top:8px">
+            <input type="number" id="sa_${id}" placeholder="Sets ${esc(teamName(m.teamA))}" style="max-width:110px">
+            <input type="number" id="sb_${id}" placeholder="Sets ${esc(teamName(m.teamB))}" style="max-width:110px">
+            <button class="small" onclick="guardarResultado('${id}', ${JSON.stringify(m).replace(/"/g,'&quot;')}, document.getElementById('sa_${id}').value, document.getElementById('sb_${id}').value)">Guardar resultado</button>
+          </div>`;
+      }
+    } else if(m.proposal){
+      html += `<p class="muted">Fecha propuesta: ${m.proposal.date} ${m.proposal.time}</p>`;
+    }
+    html += `</div>`;
+  });
+
+  if(config.phase==="finished"){
+    html += `<div class="card"><h2 style="margin-top:0">🏆 Liguilla terminada</h2><p class="muted">Consulta la clasificación final arriba.</p></div>`;
+  }
+  app.innerHTML=html;
+}
+
+window.entrarConNombre=entrarConNombre; window.cerrarSesion=cerrarSesion; window.crearEquipo=crearEquipo; window.unirseEquipo=unirseEquipo;
+window.adminLogin=adminLogin; window.lanzarLiguilla=lanzarLiguilla; window.proponerFecha=proponerFecha;
+window.votarOk=votarOk; window.guardarResultado=guardarResultado;
+</script>
+</body>
+</html>
