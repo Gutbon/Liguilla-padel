@@ -30,11 +30,28 @@ td,th{padding:6px 4px;border-bottom:1px solid var(--border);text-align:left}
 .vteam{font-weight:600}
 .vs{color:var(--muted);font-size:12px;margin:0 4px}
 .loading{color:var(--muted);padding:40px 0;text-align:center}
+#debugPanel{position:fixed;bottom:0;left:0;right:0;max-height:40vh;overflow-y:auto;background:#0b0b0d;color:#9ef29e;font:11px/1.5 monospace;padding:8px 10px;border-top:2px solid var(--accent);z-index:9999}
+#debugPanel .err{color:#ff8a8a}
+#debugPanel b{color:#fff}
 </style>
 </head>
 <body>
 <div class="wrap" id="app"><div class="loading">Cargando…</div></div>
+<div id="debugPanel"><b>🔧 Panel de depuración</b> <span id="debugLog"></span></div>
 
+<script>
+function __log(msg, isErr){
+  const panel = document.getElementById('debugLog');
+  const time = new Date().toLocaleTimeString();
+  const line = document.createElement('div');
+  if(isErr) line.className='err';
+  line.textContent = `[${time}] ${msg}`;
+  panel.appendChild(line);
+}
+window.addEventListener('error', e => __log('Error de script: '+(e.message||e), true));
+window.addEventListener('unhandledrejection', e => __log('Promesa rechazada: '+(e.reason&&e.reason.message?e.reason.message:e.reason), true));
+__log('HTML cargado, arrancando script…');
+</script>
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import { getFirestore, doc, setDoc, updateDoc, onSnapshot, collection } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
@@ -52,9 +69,11 @@ const firebaseConfig = {
 // ⚠️ Cambia este PIN antes de publicar. Cualquiera que lo sepa puede lanzar la liguilla.
 const ADMIN_PIN = "PADEL2026";
 
+__log('Imports de Firebase OK, inicializando con projectId="'+firebaseConfig.projectId+'"…');
 const app = initializeApp(firebaseConfig);
 const dbase = getFirestore(app);
 const auth = getAuth(app);
+__log('Firebase inicializado. Iniciando sesión anónima…');
 
 let myId=localStorage.getItem('padel_myid'), isAdmin=false;
 let players={}, teams={}, matches={}, config={phase:"registration", currentRound:0, totalRounds:0, schedule:null};
@@ -64,16 +83,17 @@ let lastError=null;
 function esc(s){ return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 function showError(ctx,err){ console.error(ctx,err); lastError=ctx+': '+(err&&err.message?err.message:String(err)); render(); }
 
-signInAnonymously(auth).catch(err=>showError('No se pudo conectar',err));
+signInAnonymously(auth).then(()=>__log('✅ Sesión anónima iniciada')).catch(err=>{ __log('❌ Falló el login anónimo: '+err.message+' (código: '+err.code+')', true); showError('No se pudo conectar',err); });
 onAuthStateChanged(auth, async u=>{
+  __log(u ? '✅ onAuthStateChanged: hay usuario autenticado' : '⚠️ onAuthStateChanged: sin usuario');
   if(!u) return;
-  onSnapshot(collection(dbase,"players"), snap=>{ players={}; snap.docs.forEach(d=>players[d.id]=d.data()); loaded.players=true; render(); }, err=>showError('Error leyendo jugadores',err));
-  onSnapshot(collection(dbase,"teams"), snap=>{ teams={}; snap.docs.forEach(d=>teams[d.id]=d.data()); loaded.teams=true; render(); }, err=>showError('Error leyendo equipos',err));
-  onSnapshot(collection(dbase,"matches"), snap=>{ matches={}; snap.docs.forEach(d=>matches[d.id]=d.data()); loaded.matches=true; render(); }, err=>showError('Error leyendo partidos',err));
-  onSnapshot(doc(dbase,"config/state"), d=>{ if(d && d.data()) config=d.data(); loaded.config=true; render(); }, err=>showError('Error leyendo config',err));
+  onSnapshot(collection(dbase,"players"), snap=>{ players={}; snap.docs.forEach(d=>players[d.id]=d.data()); loaded.players=true; __log('✅ players cargado ('+snap.docs.length+' docs)'); render(); }, err=>{ __log('❌ Error leyendo players: '+err.message,true); showError('Error leyendo jugadores',err); });
+  onSnapshot(collection(dbase,"teams"), snap=>{ teams={}; snap.docs.forEach(d=>teams[d.id]=d.data()); loaded.teams=true; __log('✅ teams cargado ('+snap.docs.length+' docs)'); render(); }, err=>{ __log('❌ Error leyendo teams: '+err.message,true); showError('Error leyendo equipos',err); });
+  onSnapshot(collection(dbase,"matches"), snap=>{ matches={}; snap.docs.forEach(d=>matches[d.id]=d.data()); loaded.matches=true; __log('✅ matches cargado ('+snap.docs.length+' docs)'); render(); }, err=>{ __log('❌ Error leyendo matches: '+err.message,true); showError('Error leyendo partidos',err); });
+  onSnapshot(doc(dbase,"config/state"), d=>{ if(d && d.data()) config=d.data(); loaded.config=true; __log('✅ config cargado'); render(); }, err=>{ __log('❌ Error leyendo config: '+err.message,true); showError('Error leyendo config',err); });
   if(myId){
     const nm=localStorage.getItem('padel_myname');
-    if(nm){ try{ await setDoc(doc(dbase,"players/"+myId), {name:nm}, {merge:true}); }catch(err){ showError('No se pudo sincronizar tu perfil',err); } }
+    if(nm){ try{ await setDoc(doc(dbase,"players/"+myId), {name:nm}, {merge:true}); __log('✅ Perfil sincronizado'); }catch(err){ __log('❌ No se pudo sincronizar el perfil: '+err.message,true); showError('No se pudo sincronizar tu perfil',err); } }
   }
 });
 function allLoaded(){ return loaded.players&&loaded.teams&&loaded.matches&&loaded.config; }
@@ -84,8 +104,8 @@ function roundRobin(teamIds){
   const n=list.length, rounds=[];
   for(let r=0;r<n-1;r++){
     const rm=[];
-    for(let i=0;i<n/2;i++){ const a=list[i], b=list[n-1-i]; if(a&&b) rm.push([a,b]); }
-    rounds.push(rm);
+    for(let i=0;i<n/2;i++){ const a=list[i], b=list[n-1-i]; if(a&&b) rm.push({a,b}); }
+    rounds.push({matches:rm}); // objeto, no array, para evitar arrays anidados en Firestore
     list.splice(1,0,list.pop());
   }
   return rounds;
@@ -139,7 +159,7 @@ async function lanzarLiguilla(){
 async function crearPartidosRonda(schedule, roundIdx){
   if(roundIdx>=schedule.length) return;
   try{
-    await Promise.all(schedule[roundIdx].map(([a,b])=>
+    await Promise.all(schedule[roundIdx].matches.map(({a,b})=>
       setDoc(doc(dbase,`matches/r${roundIdx}_${a}_${b}`), {round:roundIdx, teamA:a, teamB:b, proposal:null, votes:{}, confirmed:false, played:false, result:null})
     ));
   }catch(err){ showError('No se pudieron crear los partidos de la ronda',err); }
@@ -169,7 +189,7 @@ async function guardarResultado(matchId, m, sA, sB){
 async function checkRondaCompleta(){
   const cur=config.currentRound;
   const roundMatches=Object.values(matches).filter(m=>m.round===cur);
-  const total=(config.schedule||[])[cur]?.length||0;
+  const total=(config.schedule||[])[cur]?.matches.length||0;
   if(roundMatches.length>=total && roundMatches.every(m=>m.played)){
     const next=cur+1;
     try{
@@ -197,20 +217,31 @@ function teamName(id){ return id && teams[id] ? teams[id].name : '—'; }
 
 function render(){
   const app=document.getElementById('app');
-  if(!allLoaded()){ app.innerHTML='<div class="loading">Cargando…</div>'; return; }
-
   let html = `<h1>🎾 Liguilla de Pádel</h1>`;
   if(myId) html += `<p class="muted" style="margin:-2px 0 14px">Conectado como <b>${esc(localStorage.getItem('padel_myname')||myId)}</b> · <a href="#" onclick="cerrarSesion();return false;" style="color:var(--muted)">cambiar</a></p>`;
   if(lastError) html += `<div class="card" style="border-color:var(--danger);color:var(--danger)">⚠️ ${esc(lastError)}</div>`;
+  if(!allLoaded()){ html += '<div class="loading">Cargando… (mira el panel verde de abajo para ver en qué paso se queda)</div>'; app.innerHTML=html; return; }
 
-  if(config.phase==="registration"){
-    html += `<div class="card"><h2 style="margin-top:0">Panel de admin</h2>`;
-    if(!isAdmin){
-      html += `<button class="secondary" onclick="adminLogin()">Soy el admin</button>`;
-    } else {
-      html += `<p class="muted">${Object.keys(teams).length} equipos registrados.</p>
-      <button onclick="lanzarLiguilla()" ${Object.keys(teams).length<2?'disabled':''}>Lanzar liguilla</button>`;
-    }
+  html += `<div class="card"><h2 style="margin-top:0">Panel de admin</h2>`;
+  if(!isAdmin){
+    html += `<button class="secondary" onclick="adminLogin()">Soy el admin</button>`;
+  } else if(config.phase==="registration"){
+    html += `<p class="muted">${Object.keys(teams).length} equipos registrados.</p>
+    <button onclick="lanzarLiguilla()" ${Object.keys(teams).length<2?'disabled':''}>Lanzar liguilla</button>`;
+  } else {
+    html += `<p class="muted">La liguilla ya está lanzada.</p>`;
+  }
+  html += `</div>`;
+  if(isAdmin){
+    const assigned=new Set(Object.values(teams).flatMap(t=>t.players));
+    const sinEquipo=Object.entries(players).filter(([id])=>!assigned.has(id));
+    html += `<div class="card"><h2 style="margin-top:0">Equipos y jugadores</h2><table><tr><th>Equipo</th><th>Jugadores</th></tr>`;
+    Object.values(teams).forEach(t=>{
+      const names=t.players.map(pid=>players[pid]?esc(players[pid].name):pid).join(', ');
+      html += `<tr><td>${esc(t.name)}</td><td>${names}</td></tr>`;
+    });
+    html += `</table>`;
+    if(sinEquipo.length) html += `<p class="muted" style="margin-top:8px">Sin equipo: ${sinEquipo.map(([id,p])=>esc(p.name)).join(', ')}</p>`;
     html += `</div>`;
   }
 
