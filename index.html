@@ -59,7 +59,7 @@ __log('HTML cargado, arrancando script…');
 </script>
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import { getFirestore, doc, setDoc, updateDoc, onSnapshot, collection } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { getFirestore, doc, setDoc, updateDoc, deleteDoc, onSnapshot, collection } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 
 // ⚠️ PEGA AQUÍ TU CONFIG DE FIREBASE (Configuración del proyecto > Tus apps > Web)
@@ -191,6 +191,34 @@ async function guardarResultado(matchId, m, sA, sB){
     await checkRondaCompleta();
   }catch(err){ showError('No se pudo guardar el resultado',err); }
 }
+async function resetearLiga(){
+  if(!isAdmin) return;
+  if(!confirm('¿Seguro? Se borrarán TODOS los jugadores, equipos y partidos, y la liga vuelve a "registro". No se puede deshacer.')) return;
+  try{
+    await Promise.all([
+      ...Object.keys(players).map(id=>deleteDoc(doc(dbase,"players/"+id))),
+      ...Object.keys(teams).map(id=>deleteDoc(doc(dbase,"teams/"+id))),
+      ...Object.keys(matches).map(id=>deleteDoc(doc(dbase,"matches/"+id)))
+    ]);
+    await setDoc(doc(dbase,"config/state"), {phase:"registration", currentRound:0, totalRounds:0, schedule:null});
+  }catch(err){ showError('No se pudo resetear la liga',err); }
+}
+async function eliminarEquipo(teamId){
+  if(!isAdmin) return;
+  const t=teams[teamId]; if(!t) return;
+  if(!confirm('¿Eliminar el equipo "'+t.name+'"? Sus jugadores quedarán sin equipo.')) return;
+  try{
+    await Promise.all(t.players.map(pid=>updateDoc(doc(dbase,"players/"+pid), {teamId:null}).catch(()=>{})));
+    await deleteDoc(doc(dbase,"teams/"+teamId));
+  }catch(err){ showError('No se pudo eliminar el equipo',err); }
+}
+async function reiniciarPartido(matchId){
+  if(!isAdmin) return;
+  if(!confirm('¿Reiniciar este partido? Se borra la fecha propuesta, los votos y el resultado.')) return;
+  try{
+    await updateDoc(doc(dbase,"matches/"+matchId), {proposal:null, votes:{}, confirmed:false, played:false, result:null});
+  }catch(err){ showError('No se pudo reiniciar el partido',err); }
+}
 async function checkRondaCompleta(){
   const cur=config.currentRound;
   const roundMatches=Object.values(matches).filter(m=>m.round===cur);
@@ -247,14 +275,16 @@ function render(){
   if(isAdmin){
     const assigned=new Set(Object.values(teams).flatMap(t=>t.players));
     const sinEquipo=Object.entries(players).filter(([id])=>!assigned.has(id));
-    html += `<div class="card"><h2 style="margin-top:0">Equipos y jugadores</h2><table><tr><th>Equipo</th><th>Jugadores</th></tr>`;
-    Object.values(teams).forEach(t=>{
+    html += `<div class="card"><h2 style="margin-top:0">Equipos y jugadores</h2><table><tr><th>Equipo</th><th>Jugadores</th><th></th></tr>`;
+    Object.entries(teams).forEach(([id,t])=>{
       const names=t.players.map(pid=>players[pid]?esc(players[pid].name):pid).join(', ');
-      html += `<tr><td>${esc(t.name)}</td><td>${names}</td></tr>`;
+      html += `<tr><td>${esc(t.name)}</td><td>${names}</td><td><button class="small secondary" style="border-color:var(--danger);color:var(--danger)" onclick="eliminarEquipo('${id}')">Eliminar</button></td></tr>`;
     });
     html += `</table>`;
     if(sinEquipo.length) html += `<p class="muted" style="margin-top:8px">Sin equipo: ${sinEquipo.map(([id,p])=>esc(p.name)).join(', ')}</p>`;
-    html += `</div>`;
+    html += `<div style="margin-top:14px;border-top:1px solid var(--border);padding-top:10px">
+      <button class="secondary" style="border-color:var(--danger);color:var(--danger)" onclick="resetearLiga()">Resetear liga completa</button>
+    </div></div>`;
   }
 
   if(!myId){
@@ -338,6 +368,9 @@ function render(){
     } else if(m.proposal){
       html += `<p class="muted">Fecha propuesta: ${m.proposal.date} ${m.proposal.time}</p>`;
     }
+    if(isAdmin){
+      html += `<div style="margin-top:8px"><button class="small secondary" style="border-color:var(--danger);color:var(--danger)" onclick="reiniciarPartido('${id}')">Reiniciar partido (admin)</button></div>`;
+    }
     html += `</div>`;
   });
 
@@ -350,6 +383,7 @@ function render(){
 window.entrarConNombre=entrarConNombre; window.cerrarSesion=cerrarSesion; window.crearEquipo=crearEquipo; window.unirseEquipo=unirseEquipo;
 window.adminLogin=adminLogin; window.lanzarLiguilla=lanzarLiguilla; window.proponerFecha=proponerFecha;
 window.votarOk=votarOk; window.guardarResultado=guardarResultado;
+window.resetearLiga=resetearLiga; window.eliminarEquipo=eliminarEquipo; window.reiniciarPartido=reiniciarPartido;
 </script>
 </body>
 </html>
