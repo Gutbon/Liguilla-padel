@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Liguilla de Pádel</title>
+<title>P.O.L.L.A.S</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8E%BE%3C/text%3E%3C/svg%3E">
 <style>
 :root{--bg:#f6f7f8;--card:#fff;--text:#1a1d21;--muted:#6b7280;--border:#e5e7eb;--accent:#16a34a;--ink:#fff;--warn:#d97706;--danger:#dc2626}
 @media (prefers-color-scheme: dark){:root{--bg:#15171a;--card:#1f2227;--text:#eef0f2;--muted:#9aa2ad;--border:#30343a;--accent:#22c55e;--ink:#06250f}}
@@ -34,13 +35,15 @@ td,th{padding:6px 4px;border-bottom:1px solid var(--border);text-align:left}
 .tabbtn.on{background:var(--accent);color:var(--ink);border-color:var(--accent)}
 .avatar{width:22px;height:22px;border-radius:50%;object-fit:cover;vertical-align:middle;margin-right:5px}
 .avatarBig{width:48px;height:48px;border-radius:50%;object-fit:cover;vertical-align:middle;margin-right:8px}
-#adminCorner{position:fixed;top:calc(env(safe-area-inset-top,0px) + 10px);right:10px;z-index:950}
+#banner{background:#C8102E;color:#fff;text-align:center;font-weight:700;padding:14px 16px;padding-top:calc(14px + env(safe-area-inset-top,0px));font-size:14px;letter-spacing:.2px}
+#adminCorner{position:fixed;top:calc(env(safe-area-inset-top,0px) + 54px);right:10px;z-index:950}
 #debugPanel{display:none;position:fixed;bottom:0;left:0;right:0;max-height:40vh;overflow-y:auto;background:#0b0b0d;color:#9ef29e;font:11px/1.5 monospace;padding:8px 10px;border-top:2px solid var(--accent);z-index:9999}
 #debugPanel .err{color:#ff8a8a}
 #debugPanel b{color:#fff}
 </style>
 </head>
 <body>
+<div id="banner">Padel Organizer for Leagues, Ladders, Activities &amp; Socials</div>
 <div class="wrap" id="app"><div class="loading">Cargando…</div></div>
 <div id="adminCorner"></div>
 <div id="debugPanel"><b>🔧 Panel de depuración</b> <span id="debugLog"></span></div>
@@ -109,10 +112,6 @@ onAuthStateChanged(auth, async u=>{
     activeLeagueId={liga:data.liga||null, torneo:data.torneo||null};
     loaded.meta=true; __log('✅ meta/active cargado'); render();
   }, err=>{ __log('❌ Error leyendo meta: '+err.message,true); showError('Error leyendo meta',err); });
-  if(myId){
-    const nm=localStorage.getItem('padel_myname');
-    if(nm){ try{ await setDoc(doc(dbase,"players/"+myId), {name:nm}, {merge:true}); __log('✅ Perfil sincronizado'); }catch(err){ __log('❌ No se pudo sincronizar el perfil: '+err.message,true); showError('No se pudo sincronizar tu perfil',err); } }
-  }
 });
 function allLoaded(){ return Object.values(loaded).every(Boolean); }
 
@@ -242,6 +241,28 @@ async function unirseEquipo(teamId){
   try{ await updateDoc(doc(dbase,"teams/"+teamId), {players:[...t.players, myId]}); }
   catch(err){ showError('No se pudo unir al equipo',err); }
 }
+async function salirDeEquipo(teamId){
+  const t=teams[teamId]; if(!t) return;
+  if(!confirm('¿Salir del equipo "'+t.name+'"? Podrás crear uno nuevo o unirte a otro.')) return;
+  try{
+    const rest=t.players.filter(p=>p!==myId);
+    if(rest.length===0){ await deleteDoc(doc(dbase,"teams/"+teamId)); }
+    else{ await updateDoc(doc(dbase,"teams/"+teamId), {players:rest}); }
+  }catch(err){ showError('No se pudo salir del equipo',err); }
+}
+async function renombrarEquipo(teamId, newName){
+  if(!isAdmin) return;
+  newName=(newName||'').trim(); if(!newName) return;
+  try{ await updateDoc(doc(dbase,"teams/"+teamId), {name:newName}); }
+  catch(err){ showError('No se pudo renombrar el equipo',err); }
+}
+async function quitarJugadorDeEquipo(teamId, playerId){
+  if(!isAdmin) return;
+  const t=teams[teamId]; if(!t) return;
+  if(!confirm('¿Quitar a este jugador del equipo "'+t.name+'"?')) return;
+  try{ await updateDoc(doc(dbase,"teams/"+teamId), {players:t.players.filter(p=>p!==playerId)}); }
+  catch(err){ showError('No se pudo quitar al jugador',err); }
+}
 async function eliminarEquipo(teamId){
   if(!isAdmin) return;
   const t=teams[teamId]; if(!t) return;
@@ -344,6 +365,18 @@ async function retrocederRonda(modo){
     await updateDoc(doc(dbase,"leagues/"+lid), {currentRound: lg.currentRound-1});
   }catch(err){ showError('No se pudo retroceder de ronda',err); }
 }
+async function renombrarJugador(id, newName){
+  if(!isAdmin) return;
+  newName=(newName||'').trim(); if(!newName) return;
+  try{ await updateDoc(doc(dbase,"players/"+id), {name:newName}); }
+  catch(err){ showError('No se pudo renombrar al jugador',err); }
+}
+async function eliminarJugador(id){
+  if(!isAdmin) return;
+  if(!confirm('¿Eliminar a este jugador? Si tiene partidos jugados, aparecerá como "Jugador Desconocido" en las estadísticas. No se puede deshacer.')) return;
+  try{ await deleteDoc(doc(dbase,"players/"+id)); }
+  catch(err){ showError('No se pudo eliminar al jugador',err); }
+}
 async function eliminarCompeticion(modo){
   const lid=activeLeagueId[modo];
   if(!isAdmin||!lid) return;
@@ -361,9 +394,20 @@ async function eliminarCompeticion(modo){
 }
 
 function renderHistorial(){
-  const list=Object.entries(leagues).sort((a,b)=>(b[1].createdAt||0)-(a[1].createdAt||0));
-  if(list.length===0) return '<div class="card muted">Todavía no hay ninguna liga ni torneo.</div>';
   let h='';
+  if(isAdmin){
+    h += `<div class="card"><h2 style="margin-top:0">Gestión de jugadores</h2><table><tr><th>Nombre</th><th></th></tr>`;
+    Object.entries(players).forEach(([id,p])=>{
+      h += `<tr><td><input type="text" id="rename_${id}" value="${esc(p.name)}" style="max-width:160px"></td>
+        <td><div class="row">
+          <button class="small secondary" onclick="renombrarJugador('${id}', document.getElementById('rename_${id}').value)">Guardar</button>
+          <button class="small secondary" style="border-color:var(--danger);color:var(--danger)" onclick="eliminarJugador('${id}')">Eliminar</button>
+        </div></td></tr>`;
+    });
+    h += `</table></div>`;
+  }
+  const list=Object.entries(leagues).sort((a,b)=>(b[1].createdAt||0)-(a[1].createdAt||0));
+  if(list.length===0){ h += '<div class="card muted">Todavía no hay ninguna liga ni torneo.</div>'; return h; }
   list.forEach(([lid,lg])=>{
     const open=historialAbierto===lid;
     const estado = lg.phase==='finished'?'ok':(lg.phase==='active'?'warn':'');
@@ -476,13 +520,24 @@ function renderCompeticion(modo){
   if(isAdmin && lg){
     const assigned=new Set(teamsOfLeague(lid).flatMap(([,t])=>t.players));
     const sinEquipo=Object.entries(players).filter(([id])=>!assigned.has(id));
-    html += `<div class="card"><h2 style="margin-top:0">Equipos y jugadores de "${esc(lg.name)}"</h2><table><tr><th>Equipo</th><th>Jugadores</th><th></th></tr>`;
+    html += `<div class="card"><h2 style="margin-top:0">Equipos y jugadores de "${esc(lg.name)}"</h2>`;
     teamsOfLeague(lid).forEach(([id,t])=>{
-      const names=t.players.map(pid=>players[pid]?esc(players[pid].name):pid).join(', ');
-      html += `<tr><td>${teamAvatar(id)}${esc(t.name)}</td><td>${names}</td><td><button class="small secondary" style="border-color:var(--danger);color:var(--danger)" onclick="eliminarEquipo('${id}')">Eliminar</button></td></tr>`;
+      const jugadoresHtml = t.players.map(pid=>{
+        const nm = players[pid] ? esc(players[pid].name) : 'Jugador Desconocido';
+        return `${nm} <a href="#" onclick="quitarJugadorDeEquipo('${id}','${pid}');return false;" style="color:var(--danger)" title="Quitar del equipo">✕</a>`;
+      }).join(', ') || '—';
+      html += `<div style="border-top:1px solid var(--border);padding:10px 0">
+        <div class="row" style="justify-content:space-between">
+          <div class="row" style="flex:1 1 auto">
+            ${teamAvatar(id)}<input type="text" id="tname_${id}" value="${esc(t.name)}" style="max-width:150px">
+            <button class="small secondary" onclick="renombrarEquipo('${id}', document.getElementById('tname_${id}').value)">Guardar</button>
+          </div>
+          <button class="small secondary" style="border-color:var(--danger);color:var(--danger)" onclick="eliminarEquipo('${id}')">Eliminar equipo</button>
+        </div>
+        <p class="muted" style="margin:6px 0 0">Jugadores: ${jugadoresHtml}</p>
+      </div>`;
     });
-    html += `</table>`;
-    if(sinEquipo.length) html += `<p class="muted" style="margin-top:8px">Sin equipo: ${sinEquipo.map(([id,p])=>esc(p.name)).join(', ')}</p>`;
+    if(sinEquipo.length) html += `<p class="muted" style="margin-top:10px">Sin equipo: ${sinEquipo.map(([id,p])=>esc(p.name)).join(', ')}</p>`;
     html += `<div style="margin-top:14px;border-top:1px solid var(--border);padding-top:10px">
       <button class="secondary" style="border-color:var(--danger);color:var(--danger)" onclick="eliminarCompeticion('${modo}')">Eliminar est${modo==='liga'?'a liga':'e torneo'}</button>
     </div></div>`;
@@ -497,7 +552,7 @@ function renderCompeticion(modo){
     return html;
   }
   const me=players[myId];
-  if(!me){ html += '<div class="loading">Preparando tu perfil…</div>'; return html; }
+  if(!me){ html += '<div class="card muted">Preparando tu perfil… si llevas así un rato, puede que el admin te haya eliminado — <a href="#" onclick="cerrarSesion();return false;" style="color:var(--muted)">vuelve a introducir tu nombre</a>.</div>'; return html; }
 
   if(!lg){
     html += `<div class="card muted">Esperando a que el admin cree un${modo==='liga'?'a liga':' torneo'}.</div>`;
@@ -525,7 +580,8 @@ function renderCompeticion(modo){
   }
 
   if(lg.phase==='registration'){
-    html += `<div class="card">${teamPhotoEditor(myTid)}<p class="muted">Esperando a que el admin lance "${esc(lg.name)}". Tu equipo: <b>${esc(teamName(myTid))}</b></p></div>`;
+    html += `<div class="card">${teamPhotoEditor(myTid)}<p class="muted">Esperando a que el admin lance "${esc(lg.name)}". Tu equipo: <b>${esc(teamName(myTid))}</b></p>
+      <button class="small secondary" onclick="salirDeEquipo('${myTid}')">Cambiar de equipo</button></div>`;
     return html;
   }
 
@@ -596,8 +652,8 @@ function renderCompeticion(modo){
 
 function render(){
   const app=document.getElementById('app');
-  let html = `<h1>🎾 Liguilla de Pádel</h1>`;
-  if(myId) html += `<p class="muted" style="margin:-2px 0 14px">Conectado como <b>${esc(localStorage.getItem('padel_myname')||myId)}</b> · <a href="#" onclick="cerrarSesion();return false;" style="color:var(--muted)">cambiar</a></p>`;
+  let html = '';
+  if(myId) html += `<p class="muted" style="margin:14px 0 14px">Conectado como <b>${esc(localStorage.getItem('padel_myname')||myId)}</b> · <a href="#" onclick="cerrarSesion();return false;" style="color:var(--muted)">cambiar</a></p>`;
   if(lastError) html += `<div class="card" style="border-color:var(--danger);color:var(--danger)">⚠️ ${esc(lastError)}</div>`;
   renderAdminCorner();
   if(!allLoaded()){ html += '<div class="loading">Cargando… (mira el panel verde de abajo para ver en qué paso se queda)</div>'; app.innerHTML=html; return; }
@@ -621,6 +677,8 @@ window.votarOk=votarOk; window.guardarResultado=guardarResultado; window.crearCo
 window.eliminarCompeticion=eliminarCompeticion; window.eliminarEquipo=eliminarEquipo; window.reiniciarPartido=reiniciarPartido;
 window.retrocederRonda=retrocederRonda; window.cambiarTab=cambiarTab; window.toggleHistorial=toggleHistorial; window.toggleDebug=toggleDebug;
 window.salirAdmin=salirAdmin; window.subirFotoEquipo=subirFotoEquipo; window.agregarPartidoManual=agregarPartidoManual; window.eliminarPartido=eliminarPartido;
+window.renombrarJugador=renombrarJugador; window.eliminarJugador=eliminarJugador;
+window.salirDeEquipo=salirDeEquipo; window.renombrarEquipo=renombrarEquipo; window.quitarJugadorDeEquipo=quitarJugadorDeEquipo;
 </script>
 </body>
 </html>
