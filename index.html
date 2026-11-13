@@ -15,7 +15,7 @@ h2{font-size:16px;margin:24px 0 10px}
 .muted{color:var(--muted);font-size:13px}
 .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:12px}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-input{background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:8px 10px;font-size:14px;width:100%}
+input,select{background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:8px 10px;font-size:14px;width:100%}
 button{background:var(--accent);color:var(--ink);border:none;border-radius:8px;padding:9px 14px;font-size:14px;font-weight:600;cursor:pointer}
 button.secondary{background:transparent;color:var(--text);border:1px solid var(--border)}
 button.small{padding:6px 10px;font-size:12px}
@@ -30,6 +30,11 @@ td,th{padding:6px 4px;border-bottom:1px solid var(--border);text-align:left}
 .vteam{font-weight:600}
 .vs{color:var(--muted);font-size:12px;margin:0 4px}
 .loading{color:var(--muted);padding:40px 0;text-align:center}
+.tabbtn{background:transparent;color:var(--muted);border:1px solid var(--border)}
+.tabbtn.on{background:var(--accent);color:var(--ink);border-color:var(--accent)}
+.avatar{width:22px;height:22px;border-radius:50%;object-fit:cover;vertical-align:middle;margin-right:5px}
+.avatarBig{width:48px;height:48px;border-radius:50%;object-fit:cover;vertical-align:middle;margin-right:8px}
+#adminCorner{position:fixed;top:calc(env(safe-area-inset-top,0px) + 10px);right:10px;z-index:950}
 #debugPanel{display:none;position:fixed;bottom:0;left:0;right:0;max-height:40vh;overflow-y:auto;background:#0b0b0d;color:#9ef29e;font:11px/1.5 monospace;padding:8px 10px;border-top:2px solid var(--accent);z-index:9999}
 #debugPanel .err{color:#ff8a8a}
 #debugPanel b{color:#fff}
@@ -37,6 +42,7 @@ td,th{padding:6px 4px;border-bottom:1px solid var(--border);text-align:left}
 </head>
 <body>
 <div class="wrap" id="app"><div class="loading">Cargando…</div></div>
+<div id="adminCorner"></div>
 <div id="debugPanel"><b>🔧 Panel de depuración</b> <span id="debugLog"></span></div>
 
 <script>
@@ -71,7 +77,7 @@ const firebaseConfig = {
   messagingSenderId: "216613664938",
   appId: "1:216613664938:web:4be2e12a9c20f17f9238d3"
 };
-// ⚠️ Cambia este PIN antes de publicar. Cualquiera que lo sepa puede lanzar la liguilla.
+// ⚠️ Cambia este PIN antes de publicar.
 const ADMIN_PIN = "PADEL2026";
 
 __log('Imports de Firebase OK, inicializando con projectId="'+firebaseConfig.projectId+'"…');
@@ -81,8 +87,10 @@ const auth = getAuth(app);
 __log('Firebase inicializado. Iniciando sesión anónima…');
 
 let myId=localStorage.getItem('padel_myid'), isAdmin=false;
-let players={}, teams={}, matches={}, config={phase:"registration", currentRound:0, totalRounds:0, schedule:null};
-let loaded={players:false,teams:false,matches:false,config:false};
+let players={}, teams={}, matches={}, leagues={};
+let activeLeagueId={liga:null, torneo:null};
+let tab='liga', historialAbierto=null;
+let loaded={players:false,teams:false,matches:false,leagues:false,meta:false};
 let lastError=null;
 
 function esc(s){ return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
@@ -95,13 +103,18 @@ onAuthStateChanged(auth, async u=>{
   onSnapshot(collection(dbase,"players"), snap=>{ players={}; snap.docs.forEach(d=>players[d.id]=d.data()); loaded.players=true; __log('✅ players cargado ('+snap.docs.length+' docs)'); render(); }, err=>{ __log('❌ Error leyendo players: '+err.message,true); showError('Error leyendo jugadores',err); });
   onSnapshot(collection(dbase,"teams"), snap=>{ teams={}; snap.docs.forEach(d=>teams[d.id]=d.data()); loaded.teams=true; __log('✅ teams cargado ('+snap.docs.length+' docs)'); render(); }, err=>{ __log('❌ Error leyendo teams: '+err.message,true); showError('Error leyendo equipos',err); });
   onSnapshot(collection(dbase,"matches"), snap=>{ matches={}; snap.docs.forEach(d=>matches[d.id]=d.data()); loaded.matches=true; __log('✅ matches cargado ('+snap.docs.length+' docs)'); render(); }, err=>{ __log('❌ Error leyendo matches: '+err.message,true); showError('Error leyendo partidos',err); });
-  onSnapshot(doc(dbase,"config/state"), d=>{ if(d && d.data()) config=d.data(); loaded.config=true; __log('✅ config cargado'); render(); }, err=>{ __log('❌ Error leyendo config: '+err.message,true); showError('Error leyendo config',err); });
+  onSnapshot(collection(dbase,"leagues"), snap=>{ leagues={}; snap.docs.forEach(d=>leagues[d.id]=d.data()); loaded.leagues=true; __log('✅ leagues cargado ('+snap.docs.length+' docs)'); render(); }, err=>{ __log('❌ Error leyendo leagues: '+err.message,true); showError('Error leyendo competiciones',err); });
+  onSnapshot(doc(dbase,"meta/active"), d=>{
+    const data=(d&&d.data())||{};
+    activeLeagueId={liga:data.liga||null, torneo:data.torneo||null};
+    loaded.meta=true; __log('✅ meta/active cargado'); render();
+  }, err=>{ __log('❌ Error leyendo meta: '+err.message,true); showError('Error leyendo meta',err); });
   if(myId){
     const nm=localStorage.getItem('padel_myname');
     if(nm){ try{ await setDoc(doc(dbase,"players/"+myId), {name:nm}, {merge:true}); __log('✅ Perfil sincronizado'); }catch(err){ __log('❌ No se pudo sincronizar el perfil: '+err.message,true); showError('No se pudo sincronizar tu perfil',err); } }
   }
 });
-function allLoaded(){ return loaded.players&&loaded.teams&&loaded.matches&&loaded.config; }
+function allLoaded(){ return Object.values(loaded).every(Boolean); }
 
 function roundRobin(teamIds){
   let list=teamIds.slice();
@@ -110,12 +123,33 @@ function roundRobin(teamIds){
   for(let r=0;r<n-1;r++){
     const rm=[];
     for(let i=0;i<n/2;i++){ const a=list[i], b=list[n-1-i]; if(a&&b) rm.push({a,b}); }
-    rounds.push({matches:rm}); // objeto, no array, para evitar arrays anidados en Firestore
+    rounds.push({matches:rm});
     list.splice(1,0,list.pop());
   }
   return rounds;
 }
 
+// ---- Helpers ----
+function teamsOfLeague(lid){ return Object.entries(teams).filter(([id,t])=>t.leagueId===lid); }
+function matchesOfLeague(lid){ return Object.entries(matches).filter(([id,m])=>m.leagueId===lid); }
+function myTeamIdIn(lid){ const f=teamsOfLeague(lid).find(([id,t])=>t.players.includes(myId)); return f?f[0]:null; }
+function teamName(id){ return id && teams[id] ? teams[id].name : '—'; }
+function teamAvatar(id){ const t=id&&teams[id]; return (t&&t.photo) ? `<img class="avatar" src="${t.photo}">` : ''; }
+function standingsFor(lid){
+  const rows = teamsOfLeague(lid).map(([id,t])=>{
+    const played = matchesOfLeague(lid).map(([,m])=>m).filter(m=>m.played&&(m.teamA===id||m.teamB===id));
+    const wins = played.filter(m=>m.result.winner===id).length;
+    let sf=0, sc=0;
+    played.forEach(m=>{
+      if(m.teamA===id){ sf+=m.result.setsA; sc+=m.result.setsB; } else { sf+=m.result.setsB; sc+=m.result.setsA; }
+    });
+    return {id, name:t.name, pj:played.length, pg:wins, pp:played.length-wins, sf, sc, dif:sf-sc};
+  });
+  rows.sort((a,b)=> b.pg-a.pg || b.dif-a.dif || b.sf-a.sf);
+  return rows;
+}
+
+// ---- Login ----
 async function entrarConNombre(name){
   name=(name||'').trim(); if(!name) return;
   const slug=name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'');
@@ -131,43 +165,120 @@ function cerrarSesion(){
   localStorage.removeItem('padel_myid'); localStorage.removeItem('padel_myname');
   myId=null; isAdmin=false; render();
 }
-async function crearEquipo(name){
-  if(!name.trim()) return;
-  try{
-    const teamId="t_"+Math.random().toString(36).slice(2,9);
-    await setDoc(doc(dbase,"teams/"+teamId), {name:name.trim(), players:[myId]});
-    await updateDoc(doc(dbase,"players/"+myId), {teamId});
-  }catch(err){ showError('No se pudo crear el equipo',err); }
-}
-async function unirseEquipo(teamId){
-  const t=teams[teamId]; if(!t||t.players.length>=2) return;
-  try{
-    await updateDoc(doc(dbase,"teams/"+teamId), {players:[...t.players, myId]});
-    await updateDoc(doc(dbase,"players/"+myId), {teamId});
-  }catch(err){ showError('No se pudo unir al equipo',err); }
-}
 function adminLogin(){
   const pin=prompt('PIN de admin:');
   if(pin===null) return;
   if(pin===ADMIN_PIN){ isAdmin=true; render(); } else alert('PIN incorrecto');
 }
-async function lanzarLiguilla(){
-  if(!isAdmin) return;
-  const teamIds=Object.keys(teams);
-  if(teamIds.length<2) return;
-  const schedule=roundRobin(teamIds);
-  try{
-    await setDoc(doc(dbase,"config/state"), {phase:"active", currentRound:0, totalRounds:schedule.length, schedule});
-    await crearPartidosRonda(schedule,0);
-  }catch(err){ showError('No se pudo lanzar la liguilla',err); }
+function salirAdmin(){ isAdmin=false; render(); }
+function renderAdminCorner(){
+  const el=document.getElementById('adminCorner'); if(!el) return;
+  el.innerHTML = isAdmin
+    ? `<button class="small secondary" onclick="salirAdmin()">Salir de admin</button>`
+    : `<button class="small secondary" onclick="adminLogin()">Acceso admin</button>`;
 }
-async function crearPartidosRonda(schedule, roundIdx){
+function cambiarTab(t){ tab=t; render(); }
+function toggleHistorial(lid){ historialAbierto = historialAbierto===lid ? null : lid; render(); }
+
+// ---- Fotos de equipo ----
+function resizeImageFile(file, maxSize){
+  return new Promise((resolve,reject)=>{
+    const reader=new FileReader();
+    reader.onload=e=>{
+      const img=new Image();
+      img.onload=()=>{
+        let w=img.width, h=img.height;
+        if(w>h){ if(w>maxSize){ h=Math.round(h*maxSize/w); w=maxSize; } }
+        else { if(h>maxSize){ w=Math.round(w*maxSize/h); h=maxSize; } }
+        const canvas=document.createElement('canvas'); canvas.width=w; canvas.height=h;
+        canvas.getContext('2d').drawImage(img,0,0,w,h);
+        resolve(canvas.toDataURL('image/jpeg',0.7));
+      };
+      img.onerror=()=>reject(new Error('Imagen no válida'));
+      img.src=e.target.result;
+    };
+    reader.onerror=()=>reject(new Error('No se pudo leer el archivo'));
+    reader.readAsDataURL(file);
+  });
+}
+async function subirFotoEquipo(teamId, inputEl){
+  const file = inputEl.files && inputEl.files[0]; if(!file) return;
+  try{
+    const dataUrl = await resizeImageFile(file, 160);
+    if(dataUrl.length > 700000){ alert('La foto pesa demasiado incluso reducida, prueba con otra.'); return; }
+    await updateDoc(doc(dbase,"teams/"+teamId), {photo:dataUrl});
+  }catch(err){ showError('No se pudo subir la foto',err); }
+}
+function teamPhotoEditor(teamId){
+  const t=teams[teamId];
+  const img = (t&&t.photo) ? `<img class="avatarBig" src="${t.photo}">` : '';
+  return `<div class="row" style="align-items:center;margin-bottom:10px">${img}<label class="small secondary" style="cursor:pointer;padding:6px 10px;border:1px solid var(--border);border-radius:8px">
+    📷 ${t&&t.photo?'Cambiar foto del equipo':'Añadir foto del equipo'}
+    <input type="file" accept="image/*" style="display:none" onchange="subirFotoEquipo('${teamId}', this)">
+  </label></div>`;
+}
+
+// ---- Competiciones ----
+async function crearCompeticion(modo, name){
+  if(!isAdmin) return;
+  name=(name||'').trim();
+  if(!name) name=(modo==='liga'?'Liga ':'Torneo ')+(Object.values(leagues).filter(l=>l.mode===modo).length+1);
+  const lid=(modo==='liga'?'lg_':'tn_')+Math.random().toString(36).slice(2,9);
+  try{
+    await setDoc(doc(dbase,"leagues/"+lid), {name, mode:modo, phase:'registration', currentRound:0, totalRounds:0, schedule:null, createdAt:Date.now()});
+    await setDoc(doc(dbase,"meta/active"), {[modo]:lid}, {merge:true});
+  }catch(err){ showError('No se pudo crear',err); }
+}
+async function crearEquipo(modo, name){
+  const lid=activeLeagueId[modo];
+  if(!name.trim()||!lid) return;
+  try{
+    const teamId="t_"+Math.random().toString(36).slice(2,9);
+    await setDoc(doc(dbase,"teams/"+teamId), {name:name.trim(), players:[myId], leagueId:lid});
+  }catch(err){ showError('No se pudo crear el equipo',err); }
+}
+async function unirseEquipo(teamId){
+  const t=teams[teamId]; if(!t||t.players.length>=2) return;
+  try{ await updateDoc(doc(dbase,"teams/"+teamId), {players:[...t.players, myId]}); }
+  catch(err){ showError('No se pudo unir al equipo',err); }
+}
+async function eliminarEquipo(teamId){
+  if(!isAdmin) return;
+  const t=teams[teamId]; if(!t) return;
+  if(!confirm('¿Eliminar el equipo "'+t.name+'"?')) return;
+  try{ await deleteDoc(doc(dbase,"teams/"+teamId)); }catch(err){ showError('No se pudo eliminar el equipo',err); }
+}
+async function lanzarCompeticion(modo){
+  const lid=activeLeagueId[modo];
+  if(!isAdmin||!lid) return;
+  const ids=teamsOfLeague(lid).map(([id])=>id);
+  if(ids.length<2) return;
+  const schedule=roundRobin(ids);
+  try{
+    await updateDoc(doc(dbase,"leagues/"+lid), {phase:'active', currentRound:0, totalRounds:schedule.length, schedule});
+    await crearPartidosRonda(lid, schedule, 0);
+  }catch(err){ showError('No se pudo lanzar',err); }
+}
+async function crearPartidosRonda(lid, schedule, roundIdx){
   if(roundIdx>=schedule.length) return;
   try{
     await Promise.all(schedule[roundIdx].matches.map(({a,b})=>
-      setDoc(doc(dbase,`matches/r${roundIdx}_${a}_${b}`), {round:roundIdx, teamA:a, teamB:b, proposal:null, votes:{}, confirmed:false, played:false, result:null})
+      setDoc(doc(dbase,`matches/${lid}_r${roundIdx}_${a}_${b}`), {leagueId:lid, round:roundIdx, teamA:a, teamB:b, proposal:null, votes:{}, confirmed:false, played:false, result:null})
     ));
   }catch(err){ showError('No se pudieron crear los partidos de la ronda',err); }
+}
+async function agregarPartidoManual(modo, teamAId, teamBId){
+  const lid=activeLeagueId[modo]; const lg=lid?leagues[lid]:null;
+  if(!isAdmin||!lid||!lg) return;
+  if(!teamAId||!teamBId||teamAId===teamBId){ alert('Elige dos equipos distintos'); return; }
+  try{
+    await setDoc(doc(dbase,`matches/${lid}_r${lg.currentRound}_${teamAId}_${teamBId}`), {leagueId:lid, round:lg.currentRound, teamA:teamAId, teamB:teamBId, proposal:null, votes:{}, confirmed:false, played:false, result:null});
+  }catch(err){ showError('No se pudo añadir el partido',err); }
+}
+async function eliminarPartido(matchId){
+  if(!isAdmin) return;
+  if(!confirm('¿Eliminar este partido de la ronda?')) return;
+  try{ await deleteDoc(doc(dbase,"matches/"+matchId)); }catch(err){ showError('No se pudo eliminar el partido',err); }
 }
 async function proponerFecha(matchId, date, time){
   if(!date||!time) return;
@@ -188,158 +299,261 @@ async function guardarResultado(matchId, m, sA, sB){
   const winner = sA>sB? m.teamA : m.teamB;
   try{
     await updateDoc(doc(dbase,"matches/"+matchId), {played:true, result:{setsA:sA, setsB:sB, winner}});
-    await checkRondaCompleta();
+    await checkRondaCompleta(m.leagueId);
   }catch(err){ showError('No se pudo guardar el resultado',err); }
-}
-async function resetearLiga(){
-  if(!isAdmin) return;
-  if(!confirm('¿Seguro? Se borrarán TODOS los jugadores, equipos y partidos, y la liga vuelve a "registro". No se puede deshacer.')) return;
-  try{
-    await Promise.all([
-      ...Object.keys(players).map(id=>deleteDoc(doc(dbase,"players/"+id))),
-      ...Object.keys(teams).map(id=>deleteDoc(doc(dbase,"teams/"+id))),
-      ...Object.keys(matches).map(id=>deleteDoc(doc(dbase,"matches/"+id)))
-    ]);
-    await setDoc(doc(dbase,"config/state"), {phase:"registration", currentRound:0, totalRounds:0, schedule:null});
-  }catch(err){ showError('No se pudo resetear la liga',err); }
-}
-async function eliminarEquipo(teamId){
-  if(!isAdmin) return;
-  const t=teams[teamId]; if(!t) return;
-  if(!confirm('¿Eliminar el equipo "'+t.name+'"? Sus jugadores quedarán sin equipo.')) return;
-  try{
-    await Promise.all(t.players.map(pid=>updateDoc(doc(dbase,"players/"+pid), {teamId:null}).catch(()=>{})));
-    await deleteDoc(doc(dbase,"teams/"+teamId));
-  }catch(err){ showError('No se pudo eliminar el equipo',err); }
 }
 async function reiniciarPartido(matchId){
   if(!isAdmin) return;
   if(!confirm('¿Reiniciar este partido? Se borra la fecha propuesta, los votos y el resultado.')) return;
-  try{
-    await updateDoc(doc(dbase,"matches/"+matchId), {proposal:null, votes:{}, confirmed:false, played:false, result:null});
-  }catch(err){ showError('No se pudo reiniciar el partido',err); }
+  try{ await updateDoc(doc(dbase,"matches/"+matchId), {proposal:null, votes:{}, confirmed:false, played:false, result:null}); }
+  catch(err){ showError('No se pudo reiniciar el partido',err); }
 }
-async function checkRondaCompleta(){
-  const cur=config.currentRound;
-  const roundMatches=Object.values(matches).filter(m=>m.round===cur);
-  const total=(config.schedule||[])[cur]?.matches.length||0;
+async function checkRondaCompleta(lid){
+  const lg=leagues[lid]; if(!lg) return;
+  const cur=lg.currentRound;
+  const roundMatches=matchesOfLeague(lid).map(([,m])=>m).filter(m=>m.round===cur);
+  const total=(lg.schedule||[])[cur]?.matches.length||0;
   if(roundMatches.length>=total && roundMatches.every(m=>m.played)){
     const next=cur+1;
     try{
-      if(next<config.totalRounds){
-        await updateDoc(doc(dbase,"config/state"), {currentRound:next});
-        await crearPartidosRonda(config.schedule, next);
+      if(next<lg.totalRounds){
+        await updateDoc(doc(dbase,"leagues/"+lid), {currentRound:next});
+        await crearPartidosRonda(lid, lg.schedule, next);
       } else {
-        await updateDoc(doc(dbase,"config/state"), {phase:"finished"});
+        await updateDoc(doc(dbase,"leagues/"+lid), {phase:'finished'});
       }
     }catch(err){ showError('No se pudo avanzar de ronda',err); }
   }
 }
-
-function standings(){
-  const rows=Object.keys(teams).map(id=>{
-    const t=teams[id];
-    const played=Object.values(matches).filter(m=>m.played&&(m.teamA===id||m.teamB===id));
-    const wins=played.filter(m=>m.result.winner===id).length;
-    return {id, name:t.name, pj:played.length, pg:wins, pp:played.length-wins};
-  });
-  rows.sort((a,b)=> b.pg-a.pg || a.pp-b.pp);
-  return rows;
-}
-function teamName(id){ return id && teams[id] ? teams[id].name : '—'; }
-
-function render(){
-  const app=document.getElementById('app');
-  let html = `<h1>🎾 Liguilla de Pádel</h1>`;
-  if(myId) html += `<p class="muted" style="margin:-2px 0 14px">Conectado como <b>${esc(localStorage.getItem('padel_myname')||myId)}</b> · <a href="#" onclick="cerrarSesion();return false;" style="color:var(--muted)">cambiar</a></p>`;
-  if(lastError) html += `<div class="card" style="border-color:var(--danger);color:var(--danger)">⚠️ ${esc(lastError)}</div>`;
-  if(!allLoaded()){ html += '<div class="loading">Cargando… (mira el panel verde de abajo para ver en qué paso se queda)</div>'; app.innerHTML=html; return; }
-
-  html += `<div class="card"><h2 style="margin-top:0">Panel de admin</h2>`;
-  if(!isAdmin){
-    html += `<button class="secondary" onclick="adminLogin()">Soy el admin</button>`;
-  } else if(config.phase==="registration"){
-    html += `<p class="muted">${Object.keys(teams).length} equipos registrados.</p>
-    <button onclick="lanzarLiguilla()" ${Object.keys(teams).length<2?'disabled':''}>Lanzar liguilla</button>`;
-  } else {
-    html += `<p class="muted">La liguilla ya está lanzada.</p>`;
+async function retrocederRonda(modo){
+  const lid=activeLeagueId[modo];
+  if(!isAdmin||!lid) return;
+  const lg=leagues[lid]; if(!lg) return;
+  if(lg.phase==='registration'){ alert('Todavía no ha empezado.'); return; }
+  if(lg.phase==='finished'){
+    if(!confirm('¿Reabrir la última ronda para corregir un resultado?')) return;
+    try{ await updateDoc(doc(dbase,"leagues/"+lid), {phase:'active'}); }
+    catch(err){ showError('No se pudo reabrir la ronda',err); }
+    return;
   }
+  if(lg.currentRound<=0){ alert('Ya estás en la primera ronda.'); return; }
+  if(!confirm('¿Retroceder a la ronda anterior? Se borrarán los partidos ya generados de la ronda '+(lg.currentRound+1)+'.')) return;
+  try{
+    const toDelete=matchesOfLeague(lid).filter(([,m])=>m.round===lg.currentRound).map(([id])=>id);
+    await Promise.all(toDelete.map(id=>deleteDoc(doc(dbase,"matches/"+id))));
+    await updateDoc(doc(dbase,"leagues/"+lid), {currentRound: lg.currentRound-1});
+  }catch(err){ showError('No se pudo retroceder de ronda',err); }
+}
+async function eliminarCompeticion(modo){
+  const lid=activeLeagueId[modo];
+  if(!isAdmin||!lid) return;
+  if(!confirm('¿Eliminar est'+(modo==='liga'?'a liga':'e torneo')+' (sus equipos y partidos)? El historial no se toca. No se puede deshacer.')) return;
+  try{
+    const tds=teamsOfLeague(lid).map(([id])=>id);
+    const mds=matchesOfLeague(lid).map(([id])=>id);
+    await Promise.all([
+      ...tds.map(id=>deleteDoc(doc(dbase,"teams/"+id))),
+      ...mds.map(id=>deleteDoc(doc(dbase,"matches/"+id)))
+    ]);
+    await deleteDoc(doc(dbase,"leagues/"+lid));
+    await updateDoc(doc(dbase,"meta/active"), {[modo]:null}).catch(()=>{});
+  }catch(err){ showError('No se pudo eliminar',err); }
+}
+
+function renderHistorial(){
+  const list=Object.entries(leagues).sort((a,b)=>(b[1].createdAt||0)-(a[1].createdAt||0));
+  if(list.length===0) return '<div class="card muted">Todavía no hay ninguna liga ni torneo.</div>';
+  let h='';
+  list.forEach(([lid,lg])=>{
+    const open=historialAbierto===lid;
+    const estado = lg.phase==='finished'?'ok':(lg.phase==='active'?'warn':'');
+    const texto = lg.phase==='finished'?'Terminad'+(lg.mode==='liga'?'a':'o'):(lg.phase==='active'?'En curso':'Registro');
+    h += `<div class="card">
+      <div class="row" style="justify-content:space-between;cursor:pointer" onclick="toggleHistorial('${lid}')">
+        <span><b>${esc(lg.name||lid)}</b> <span class="badge">${lg.mode==='torneo'?'Torneo':'Liga'}</span></span>
+        <span class="badge ${estado}">${texto}</span>
+      </div>`;
+    if(open){
+      h += `<h2 style="margin:12px 0 8px">Clasificación</h2><table><tr><th>Equipo</th><th>PJ</th><th>G</th><th>P</th><th>Sets</th><th>Dif</th></tr>`;
+      standingsFor(lid).forEach(r=>{ h+=`<tr><td>${teamAvatar(r.id)}${esc(r.name)}</td><td>${r.pj}</td><td>${r.pg}</td><td>${r.pp}</td><td>${r.sf}-${r.sc}</td><td>${r.dif>0?'+':''}${r.dif}</td></tr>`; });
+      h += `</table>`;
+      const ms=matchesOfLeague(lid).map(([,m])=>m).sort((a,b)=>a.round-b.round);
+      if(ms.length){
+        h += `<h2 style="margin:12px 0 8px">Partidos</h2>`;
+        let cur=-1;
+        ms.forEach(m=>{
+          if(m.round!==cur){ cur=m.round; h+=`<p class="muted" style="margin:10px 0 2px">Ronda ${cur+1}</p>`; }
+          const res = m.played ? `${m.result.setsA}-${m.result.setsB} · gana ${esc(teamName(m.result.winner))}` : 'pendiente';
+          h += `<p style="margin:2px 0">${teamAvatar(m.teamA)}${esc(teamName(m.teamA))} vs ${teamAvatar(m.teamB)}${esc(teamName(m.teamB))} — ${res}</p>`;
+        });
+      } else { h += `<p class="muted">Sin partidos todavía.</p>`; }
+    }
+    h += `</div>`;
+  });
+  return h;
+}
+
+function renderMisPartidos(){
+  if(!myId) return `<div class="card muted">Pon tu nombre en la pestaña Liga o Torneo para ver tu historial personal.</div>`;
+  const misEquipos=new Set(Object.entries(teams).filter(([id,t])=>t.players.includes(myId)).map(([id])=>id));
+  const propios=Object.values(matches).filter(m=>m.played && (misEquipos.has(m.teamA)||misEquipos.has(m.teamB)));
+  let g=0,p=0;
+  const rows=propios.map(m=>{
+    const ladoA=misEquipos.has(m.teamA);
+    const miId=ladoA?m.teamA:m.teamB, rivalId=ladoA?m.teamB:m.teamA;
+    const gane=m.result.winner===miId;
+    if(gane) g++; else p++;
+    const lg=leagues[m.leagueId];
+    const marcador=ladoA?`${m.result.setsA}-${m.result.setsB}`:`${m.result.setsB}-${m.result.setsA}`;
+    return {liga: lg?lg.name:'—', modo: lg?(lg.mode==='torneo'?'Torneo':'Liga'):'', rivalId, gane, marcador};
+  });
+  let h=`<div class="card"><h2 style="margin-top:0">Tu historial</h2><p style="font-size:16px;margin:0"><b style="color:var(--accent)">${g}</b> ganados · <b style="color:var(--danger)">${p}</b> perdidos</p><p class="muted" style="margin:4px 0 0">${rows.length} partidos jugados en total</p></div>`;
+  if(rows.length===0){ h+='<div class="card muted">Todavía no has jugado ningún partido.</div>'; return h; }
+  h += `<div class="card"><table><tr><th>Competición</th><th>Rival</th><th>Resultado</th><th></th></tr>`;
+  rows.forEach(r=>{
+    h += `<tr><td>${esc(r.liga)} <span class="badge">${r.modo}</span></td><td>${teamAvatar(r.rivalId)}${esc(teamName(r.rivalId))}</td><td>${r.marcador}</td><td><span class="badge ${r.gane?'ok':'warn'}">${r.gane?'Ganado':'Perdido'}</span></td></tr>`;
+  });
+  h += `</table></div>`;
+  return h;
+}
+
+function renderCompeticion(modo){
+  const lid = activeLeagueId[modo];
+  const lg = lid ? leagues[lid] : null;
+  const label = modo==='liga' ? 'liga' : 'torneo';
+  const Label = modo==='liga' ? 'Liga' : 'Torneo';
+  let html='';
+
   if(isAdmin){
+    html += `<div class="card"><h2 style="margin-top:0">Panel de admin</h2>`;
+    if(!lg){
+      html += `<p class="muted">Todavía no hay ning${modo==='liga'?'una liga activa':'ún torneo activo'}.</p>
+      <div class="row"><input type="text" id="compInput_${modo}" placeholder="Nombre d${modo==='liga'?'e la liga':'el torneo'} (opcional)"></div>
+      <div style="margin-top:8px"><button onclick="crearCompeticion('${modo}', document.getElementById('compInput_${modo}').value)">Crear ${label}</button></div>`;
+    } else if(lg.phase==='registration'){
+      html += `<p class="muted">${teamsOfLeague(lid).length} equipos registrados en "${esc(lg.name)}".</p>
+      <button onclick="lanzarCompeticion('${modo}')" ${teamsOfLeague(lid).length<2?'disabled':''}>Lanzar ${label}</button>`;
+    } else {
+      html += `<p class="muted">${esc(lg.name)} — ${lg.phase==='finished'?'terminad'+(modo==='liga'?'a':'o'):'en curso'} (ronda ${lg.currentRound+1} de ${lg.totalRounds}).</p>
+      <div class="row">
+        <button class="secondary" onclick="retrocederRonda('${modo}')">${lg.phase==='finished'?'Reabrir última ronda':'Retroceder ronda'}</button>
+        ${lg.phase==='finished'?`<button onclick="document.getElementById('nuevoBox_${modo}').style.display='flex'">Crear nuev${modo==='liga'?'a liga':'o torneo'}</button>`:''}
+      </div>`;
+      if(lg.phase==='finished'){
+        html += `<div id="nuevoBox_${modo}" class="row" style="display:none;margin-top:10px">
+          <input type="text" id="compInput2_${modo}" placeholder="Nombre">
+          <button class="small" onclick="crearCompeticion('${modo}', document.getElementById('compInput2_${modo}').value)">Crear</button>
+        </div>`;
+      }
+      if(lg.phase==='active'){
+        const rt=teamsOfLeague(lid);
+        html += `<div style="margin-top:14px;border-top:1px solid var(--border);padding-top:10px">
+          <button class="small secondary" onclick="const b=document.getElementById('calBox_${modo}'); b.style.display=b.style.display==='block'?'none':'block'">Editar calendario de esta ronda</button>
+          <div id="calBox_${modo}" style="display:none;margin-top:10px">
+            <p class="muted">Partidos de la ronda ${lg.currentRound+1}:</p>`;
+        matchesOfLeague(lid).filter(([,m])=>m.round===lg.currentRound).forEach(([mid,m])=>{
+          html += `<div class="row" style="justify-content:space-between;margin-bottom:6px">
+            <span>${teamAvatar(m.teamA)}${esc(teamName(m.teamA))} vs ${teamAvatar(m.teamB)}${esc(teamName(m.teamB))}</span>
+            <button class="small secondary" style="border-color:var(--danger);color:var(--danger)" onclick="eliminarPartido('${mid}')">Eliminar</button>
+          </div>`;
+        });
+        html += `<div class="row" style="margin-top:8px">
+              <select id="selA_${modo}">${rt.map(([id,t])=>`<option value="${id}">${esc(t.name)}</option>`).join('')}</select>
+              <select id="selB_${modo}">${rt.map(([id,t])=>`<option value="${id}">${esc(t.name)}</option>`).join('')}</select>
+              <button class="small" onclick="agregarPartidoManual('${modo}', document.getElementById('selA_${modo}').value, document.getElementById('selB_${modo}').value)">Añadir partido</button>
+            </div>
+          </div></div>`;
+      }
+    }
     const dbgOn=localStorage.getItem('padel_debug')==='1';
     html += `<div class="row" style="margin-top:10px;border-top:1px solid var(--border);padding-top:10px">
       <label class="muted" style="display:flex;align-items:center;gap:6px;cursor:pointer">
-        <input type="checkbox" id="debugToggle" ${dbgOn?'checked':''} onchange="toggleDebug(this.checked)"> Mostrar panel de depuración
-      </label></div>`;
+        <input type="checkbox" ${dbgOn?'checked':''} onchange="toggleDebug(this.checked)"> Mostrar panel de depuración
+      </label></div>
+    </div>`;
   }
-  html += `</div>`;
-  if(isAdmin){
-    const assigned=new Set(Object.values(teams).flatMap(t=>t.players));
+
+  if(isAdmin && lg){
+    const assigned=new Set(teamsOfLeague(lid).flatMap(([,t])=>t.players));
     const sinEquipo=Object.entries(players).filter(([id])=>!assigned.has(id));
-    html += `<div class="card"><h2 style="margin-top:0">Equipos y jugadores</h2><table><tr><th>Equipo</th><th>Jugadores</th><th></th></tr>`;
-    Object.entries(teams).forEach(([id,t])=>{
+    html += `<div class="card"><h2 style="margin-top:0">Equipos y jugadores de "${esc(lg.name)}"</h2><table><tr><th>Equipo</th><th>Jugadores</th><th></th></tr>`;
+    teamsOfLeague(lid).forEach(([id,t])=>{
       const names=t.players.map(pid=>players[pid]?esc(players[pid].name):pid).join(', ');
-      html += `<tr><td>${esc(t.name)}</td><td>${names}</td><td><button class="small secondary" style="border-color:var(--danger);color:var(--danger)" onclick="eliminarEquipo('${id}')">Eliminar</button></td></tr>`;
+      html += `<tr><td>${teamAvatar(id)}${esc(t.name)}</td><td>${names}</td><td><button class="small secondary" style="border-color:var(--danger);color:var(--danger)" onclick="eliminarEquipo('${id}')">Eliminar</button></td></tr>`;
     });
     html += `</table>`;
     if(sinEquipo.length) html += `<p class="muted" style="margin-top:8px">Sin equipo: ${sinEquipo.map(([id,p])=>esc(p.name)).join(', ')}</p>`;
     html += `<div style="margin-top:14px;border-top:1px solid var(--border);padding-top:10px">
-      <button class="secondary" style="border-color:var(--danger);color:var(--danger)" onclick="resetearLiga()">Resetear liga completa</button>
+      <button class="secondary" style="border-color:var(--danger);color:var(--danger)" onclick="eliminarCompeticion('${modo}')">Eliminar est${modo==='liga'?'a liga':'e torneo'}</button>
     </div></div>`;
   }
 
   if(!myId){
-    html += `<p class="muted">Pon tu nombre para entrar en la liguilla (sin contraseña, solo para identificarte).</p>
+    html += `<p class="muted">Pon tu nombre para entrar (sin contraseña, solo para identificarte).</p>
     <div class="card">
       <div class="row"><input type="text" id="loginInput" placeholder="Tu nombre"></div>
       <div style="margin-top:8px"><button onclick="entrarConNombre(document.getElementById('loginInput').value)">Entrar</button></div>
     </div>`;
-    app.innerHTML=html; return;
+    return html;
   }
   const me=players[myId];
-  if(!me){ html += '<div class="loading">Preparando tu perfil…</div>'; app.innerHTML=html; return; }
+  if(!me){ html += '<div class="loading">Preparando tu perfil…</div>'; return html; }
 
-  if(!me.teamId){
-    const open=Object.entries(teams).filter(([id,t])=>t.players.length<2);
-    html += `<p class="muted">Hola ${esc(me.name)}. Crea un equipo o únete a uno existente.</p>
+  if(!lg){
+    html += `<div class="card muted">Esperando a que el admin cree un${modo==='liga'?'a liga':' torneo'}.</div>`;
+    return html;
+  }
+
+  const myTid = myTeamIdIn(lid);
+  if(!myTid){
+    const open=teamsOfLeague(lid).filter(([id,t])=>t.players.length<2);
+    html += `<p class="muted">Hola ${esc(me.name)}. Crea un equipo o únete a uno existente en "${esc(lg.name)}".</p>
     <div class="card">
       <h2 style="margin-top:0">Crear equipo</h2>
-      <div class="row"><input type="text" id="teamInput" placeholder="Nombre del equipo"></div>
-      <div style="margin-top:8px"><button onclick="crearEquipo(document.getElementById('teamInput').value)">Crear</button></div>
+      <div class="row"><input type="text" id="teamInput_${modo}" placeholder="Nombre del equipo"></div>
+      <div style="margin-top:8px"><button onclick="crearEquipo('${modo}', document.getElementById('teamInput_${modo}').value)">Crear</button></div>
     </div>
     <div class="card"><h2 style="margin-top:0">Unirse a un equipo</h2>`;
     if(open.length===0) html += `<p class="muted">No hay equipos con hueco libre.</p>`;
     open.forEach(([id,t])=>{
       html += `<div class="row" style="justify-content:space-between;margin-bottom:6px">
-        <span>${esc(t.name)} <span class="badge">${t.players.length}/2</span></span>
+        <span>${teamAvatar(id)}${esc(t.name)} <span class="badge">${t.players.length}/2</span></span>
         <button class="small" onclick="unirseEquipo('${id}')">Unirme</button></div>`;
     });
     html += `</div>`;
-    app.innerHTML=html; return;
+    return html;
   }
 
-  const myTid=me.teamId;
-  if(config.phase==="registration"){
-    html += `<div class="card"><p class="muted">Esperando a que el admin lance la liguilla. Tu equipo: <b>${esc(teamName(myTid))}</b></p></div>`;
-    app.innerHTML=html; return;
+  if(lg.phase==='registration'){
+    html += `<div class="card">${teamPhotoEditor(myTid)}<p class="muted">Esperando a que el admin lance "${esc(lg.name)}". Tu equipo: <b>${esc(teamName(myTid))}</b></p></div>`;
+    return html;
   }
 
-  html += `<h2>Clasificación</h2><div class="card"><table><tr><th>Equipo</th><th>PJ</th><th>G</th><th>P</th></tr>`;
-  standings().forEach(r=>{ html += `<tr><td>${esc(r.name)}${r.id===myTid?' <span class="badge ok">tú</span>':''}</td><td>${r.pj}</td><td>${r.pg}</td><td>${r.pp}</td></tr>`; });
+  html += `<div class="card">${teamPhotoEditor(myTid)}</div>`;
+  html += `<h2>Clasificación</h2><div class="card"><table><tr><th>Equipo</th><th>PJ</th><th>G</th><th>P</th><th>Sets</th><th>Dif</th></tr>`;
+  standingsFor(lid).forEach(r=>{ html += `<tr><td>${teamAvatar(r.id)}${esc(r.name)}${r.id===myTid?' <span class="badge ok">tú</span>':''}</td><td>${r.pj}</td><td>${r.pg}</td><td>${r.pp}</td><td>${r.sf}-${r.sc}</td><td>${r.dif>0?'+':''}${r.dif}</td></tr>`; });
   html += `</table></div>`;
 
-  html += `<h2>Ronda ${config.currentRound+1} de ${config.totalRounds}</h2>`;
-  const roundMatches=Object.entries(matches).filter(([id,m])=>m.round===config.currentRound);
+  html += `<h2>Ronda ${lg.currentRound+1} de ${lg.totalRounds}</h2>`;
+  const roundMatches=matchesOfLeague(lid).filter(([id,m])=>m.round===lg.currentRound);
   if(roundMatches.length===0) html += `<div class="card muted">Generando partidos…</div>`;
   roundMatches.forEach(([id,m])=>{
     const mine = m.teamA===myTid || m.teamB===myTid;
+    const esTorneo = modo==='torneo';
     html += `<div class="card match ${mine?'mine':''}">
       <div class="row" style="justify-content:space-between">
-        <div><span class="vteam">${esc(teamName(m.teamA))}</span><span class="vs">vs</span><span class="vteam">${esc(teamName(m.teamB))}</span></div>
-        ${m.played?'<span class="badge ok">Jugado</span>': m.confirmed?'<span class="badge ok">Fecha confirmada</span>': m.proposal?'<span class="badge warn">Pendiente de votos</span>':'<span class="badge">Sin fecha</span>'}
+        <div><span class="vteam">${teamAvatar(m.teamA)}${esc(teamName(m.teamA))}</span><span class="vs">vs</span><span class="vteam">${teamAvatar(m.teamB)}${esc(teamName(m.teamB))}</span></div>
+        ${m.played?'<span class="badge ok">Jugado</span>': esTorneo?'<span class="badge warn">Por jugar</span>': (m.confirmed?'<span class="badge ok">Fecha confirmada</span>': m.proposal?'<span class="badge warn">Pendiente de votos</span>':'<span class="badge">Sin fecha</span>')}
       </div>`;
     if(m.played){
       html += `<p class="muted">Resultado: ${m.result.setsA} - ${m.result.setsB} · Ganador: ${esc(teamName(m.result.winner))}</p>`;
-    } else if(mine){
+    } else if(mine && esTorneo){
+      html += `<div class="row" style="margin-top:8px">
+        <input type="number" id="sa_${id}" placeholder="Sets ${esc(teamName(m.teamA))}" style="max-width:110px">
+        <input type="number" id="sb_${id}" placeholder="Sets ${esc(teamName(m.teamB))}" style="max-width:110px">
+        <button class="small" onclick="guardarResultado('${id}', ${JSON.stringify(m).replace(/"/g,'&quot;')}, document.getElementById('sa_${id}').value, document.getElementById('sb_${id}').value)">Guardar resultado</button>
+      </div>`;
+    } else if(mine && !esTorneo){
       if(!m.proposal){
         html += `<div class="row" style="margin-top:8px">
           <input type="date" id="d_${id}" style="max-width:150px">
@@ -365,7 +579,7 @@ function render(){
             <button class="small" onclick="guardarResultado('${id}', ${JSON.stringify(m).replace(/"/g,'&quot;')}, document.getElementById('sa_${id}').value, document.getElementById('sb_${id}').value)">Guardar resultado</button>
           </div>`;
       }
-    } else if(m.proposal){
+    } else if(!esTorneo && m.proposal){
       html += `<p class="muted">Fecha propuesta: ${m.proposal.date} ${m.proposal.time}</p>`;
     }
     if(isAdmin){
@@ -374,16 +588,39 @@ function render(){
     html += `</div>`;
   });
 
-  if(config.phase==="finished"){
-    html += `<div class="card"><h2 style="margin-top:0">🏆 Liguilla terminada</h2><p class="muted">Consulta la clasificación final arriba.</p></div>`;
+  if(lg.phase==='finished'){
+    html += `<div class="card"><h2 style="margin-top:0">🏆 ${Label} terminad${modo==='liga'?'a':'o'}</h2><p class="muted">Consulta la clasificación final arriba, o crea un${modo==='liga'?'a nueva liga':' nuevo torneo'} desde el panel de admin.</p></div>`;
   }
+  return html;
+}
+
+function render(){
+  const app=document.getElementById('app');
+  let html = `<h1>🎾 Liguilla de Pádel</h1>`;
+  if(myId) html += `<p class="muted" style="margin:-2px 0 14px">Conectado como <b>${esc(localStorage.getItem('padel_myname')||myId)}</b> · <a href="#" onclick="cerrarSesion();return false;" style="color:var(--muted)">cambiar</a></p>`;
+  if(lastError) html += `<div class="card" style="border-color:var(--danger);color:var(--danger)">⚠️ ${esc(lastError)}</div>`;
+  renderAdminCorner();
+  if(!allLoaded()){ html += '<div class="loading">Cargando… (mira el panel verde de abajo para ver en qué paso se queda)</div>'; app.innerHTML=html; return; }
+
+  html += `<div class="row" style="margin-bottom:14px">
+    <button class="tabbtn ${tab==='liga'?'on':''}" onclick="cambiarTab('liga')">Liga</button>
+    <button class="tabbtn ${tab==='torneo'?'on':''}" onclick="cambiarTab('torneo')">Torneo</button>
+    <button class="tabbtn ${tab==='mios'?'on':''}" onclick="cambiarTab('mios')">Mis partidos</button>
+    <button class="tabbtn ${tab==='historial'?'on':''}" onclick="cambiarTab('historial')">Historial</button>
+  </div>`;
+
+  if(tab==='historial') html += renderHistorial();
+  else if(tab==='mios') html += renderMisPartidos();
+  else html += renderCompeticion(tab);
   app.innerHTML=html;
 }
 
 window.entrarConNombre=entrarConNombre; window.cerrarSesion=cerrarSesion; window.crearEquipo=crearEquipo; window.unirseEquipo=unirseEquipo;
-window.adminLogin=adminLogin; window.lanzarLiguilla=lanzarLiguilla; window.proponerFecha=proponerFecha;
-window.votarOk=votarOk; window.guardarResultado=guardarResultado;
-window.resetearLiga=resetearLiga; window.eliminarEquipo=eliminarEquipo; window.reiniciarPartido=reiniciarPartido;
+window.adminLogin=adminLogin; window.lanzarCompeticion=lanzarCompeticion; window.proponerFecha=proponerFecha;
+window.votarOk=votarOk; window.guardarResultado=guardarResultado; window.crearCompeticion=crearCompeticion;
+window.eliminarCompeticion=eliminarCompeticion; window.eliminarEquipo=eliminarEquipo; window.reiniciarPartido=reiniciarPartido;
+window.retrocederRonda=retrocederRonda; window.cambiarTab=cambiarTab; window.toggleHistorial=toggleHistorial; window.toggleDebug=toggleDebug;
+window.salirAdmin=salirAdmin; window.subirFotoEquipo=subirFotoEquipo; window.agregarPartidoManual=agregarPartidoManual; window.eliminarPartido=eliminarPartido;
 </script>
 </body>
 </html>
