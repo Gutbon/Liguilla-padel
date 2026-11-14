@@ -5,35 +5,21 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Organiza tu Pádel con P.O.L.L.A.S.</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8E%BE%3C/text%3E%3C/svg%3E">
-<!-- ⚠️ Sustituye TU_URL_GITHUB_PAGES por tu URL real, p.ej. https://tuusuario.github.io/turepo -->
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Padel Organizer">
 <meta property="og:locale" content="es_ES">
 <meta property="og:url" content="https://gutbon.github.io/Liguilla-padel/">
 <meta property="og:title" content="🎾 Organiza tu Pádel con P.O.L.L.A.S." />
 <meta property="og:description" content="Equipos, calendario automático, resultados y clasificación. Liga y torneo, sin apps ni líos.">
-
 <meta name="description" content="Organiza partidos, crea ligas y torneos, consulta rankings y disfruta del pádel en grupo con P.O.L.L.A.S." />
-<meta property="og:image" content="https://github.com/Gutbon/Liguilla-padel/blob/main/og-image.png" />
+<meta property="og:image" content="https://gutbon.github.io/Liguilla-padel/og-image.png" />
 <meta property="og:image:width" content="1200" />
 <meta property="og:image:height" content="630" />
-
 <meta property="og:image:alt" content="Padel Organizer for Leagues, Ladders, Activities & Socials - P.O.L.L.A.S.">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="🎾 Organiza tu Pádel con P.O.L.L.A.S." />
-<meta name="twitter:image" content="https://github.com/Gutbon/Liguilla-padel/blob/main/og-image.png" />
+<meta name="twitter:image" content="https://gutbon.github.io/Liguilla-padel/og-image.png" />
 <meta name="twitter:description" content="Equipos, calendario automático, resultados y clasificación. Liga y torneo, sin apps ni líos.">
-
-
-
-
-
-
-
-
-
-
-
 <style>
 :root{--bg:#f6f7f8;--card:#fff;--text:#1a1d21;--muted:#6b7280;--border:#e5e7eb;--accent:#16a34a;--ink:#fff;--warn:#d97706;--danger:#dc2626}
 @media (prefers-color-scheme: dark){:root{--bg:#15171a;--card:#1f2227;--text:#eef0f2;--muted:#9aa2ad;--border:#30343a;--accent:#22c55e;--ink:#06250f}}
@@ -97,7 +83,7 @@ __log('HTML cargado, arrancando script…');
 </script>
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import { getFirestore, doc, setDoc, updateDoc, deleteDoc, onSnapshot, collection } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { getFirestore, doc, setDoc, updateDoc, deleteDoc, onSnapshot, collection, arrayUnion, arrayRemove } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 
 // ⚠️ PEGA AQUÍ TU CONFIG DE FIREBASE (Configuración del proyecto > Tus apps > Web)
@@ -120,9 +106,9 @@ __log('Firebase inicializado. Iniciando sesión anónima…');
 
 let myId=localStorage.getItem('padel_myid'), isAdmin=false;
 let players={}, teams={}, matches={}, leagues={};
-let activeLeagueId={liga:null, torneo:null};
+let selectedLeagueId={liga:localStorage.getItem('padel_sel_liga')||null, torneo:localStorage.getItem('padel_sel_torneo')||null};
 let tab='liga', historialAbierto=null;
-let loaded={players:false,teams:false,matches:false,leagues:false,meta:false};
+let loaded={players:false,teams:false,matches:false,leagues:false};
 let lastError=null;
 
 function esc(s){ return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
@@ -136,11 +122,6 @@ onAuthStateChanged(auth, async u=>{
   onSnapshot(collection(dbase,"teams"), snap=>{ teams={}; snap.docs.forEach(d=>teams[d.id]=d.data()); loaded.teams=true; __log('✅ teams cargado ('+snap.docs.length+' docs)'); render(); }, err=>{ __log('❌ Error leyendo teams: '+err.message,true); showError('Error leyendo equipos',err); });
   onSnapshot(collection(dbase,"matches"), snap=>{ matches={}; snap.docs.forEach(d=>matches[d.id]=d.data()); loaded.matches=true; __log('✅ matches cargado ('+snap.docs.length+' docs)'); render(); }, err=>{ __log('❌ Error leyendo matches: '+err.message,true); showError('Error leyendo partidos',err); });
   onSnapshot(collection(dbase,"leagues"), snap=>{ leagues={}; snap.docs.forEach(d=>leagues[d.id]=d.data()); loaded.leagues=true; __log('✅ leagues cargado ('+snap.docs.length+' docs)'); render(); }, err=>{ __log('❌ Error leyendo leagues: '+err.message,true); showError('Error leyendo competiciones',err); });
-  onSnapshot(doc(dbase,"meta/active"), d=>{
-    const data=(d&&d.data())||{};
-    activeLeagueId={liga:data.liga||null, torneo:data.torneo||null};
-    loaded.meta=true; __log('✅ meta/active cargado'); render();
-  }, err=>{ __log('❌ Error leyendo meta: '+err.message,true); showError('Error leyendo meta',err); });
 });
 function allLoaded(){ return Object.values(loaded).every(Boolean); }
 
@@ -156,11 +137,32 @@ function roundRobin(teamIds){
   }
   return rounds;
 }
+function pairKey(a,b){ return [a,b].sort().join('|'); }
+function generarParejasSinRepetir(playerIds, usedPairs){
+  const maxAttempts=500;
+  for(let attempt=0; attempt<maxAttempts; attempt++){
+    let ids=playerIds.slice();
+    for(let i=ids.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [ids[i],ids[j]]=[ids[j],ids[i]]; }
+    let byeId=null;
+    if(ids.length%2!==0){ byeId=ids.pop(); }
+    let pool=ids.slice(), pairs=[], ok=true;
+    while(pool.length>0){
+      const a=pool.shift();
+      const idx=pool.findIndex(b=>!usedPairs.has(pairKey(a,b)));
+      if(idx===-1){ ok=false; break; }
+      const b=pool.splice(idx,1)[0];
+      pairs.push([a,b]);
+    }
+    if(ok) return {pairs, byeId};
+  }
+  return null;
+}
 
 // ---- Helpers ----
 function teamsOfLeague(lid){ return Object.entries(teams).filter(([id,t])=>t.leagueId===lid); }
 function matchesOfLeague(lid){ return Object.entries(matches).filter(([id,m])=>m.leagueId===lid); }
 function myTeamIdIn(lid){ const f=teamsOfLeague(lid).find(([id,t])=>t.players.includes(myId)); return f?f[0]:null; }
+function myTeamIdInRound(lid, round){ const f=teamsOfLeague(lid).find(([id,t])=>t.round===round && t.players.includes(myId)); return f?f[0]:null; }
 function teamName(id){ return id && teams[id] ? teams[id].name : '—'; }
 function teamAvatar(id){ const t=id&&teams[id]; return (t&&t.photo) ? `<img class="avatar" src="${t.photo}">` : ''; }
 function standingsFor(lid){
@@ -173,6 +175,26 @@ function standingsFor(lid){
     });
     return {id, name:t.name, pj:played.length, pg:wins, pp:played.length-wins, sf, sc, dif:sf-sc};
   });
+  rows.sort((a,b)=> b.pg-a.pg || b.dif-a.dif || b.sf-a.sf);
+  return rows;
+}
+function standingsPlayers(lid){
+  const stats={};
+  matchesOfLeague(lid).forEach(([,m])=>{
+    if(!m.played) return;
+    const ta=teams[m.teamA]?.players||[], tb=teams[m.teamB]?.players||[];
+    ta.forEach(pid=>{
+      stats[pid]=stats[pid]||{pj:0,pg:0,pp:0,sf:0,sc:0};
+      stats[pid].pj++; stats[pid].sf+=m.result.setsA; stats[pid].sc+=m.result.setsB;
+      if(m.result.winner===m.teamA) stats[pid].pg++; else stats[pid].pp++;
+    });
+    tb.forEach(pid=>{
+      stats[pid]=stats[pid]||{pj:0,pg:0,pp:0,sf:0,sc:0};
+      stats[pid].pj++; stats[pid].sf+=m.result.setsB; stats[pid].sc+=m.result.setsA;
+      if(m.result.winner===m.teamB) stats[pid].pg++; else stats[pid].pp++;
+    });
+  });
+  const rows=Object.entries(stats).map(([pid,s])=>({id:pid, name: players[pid]?players[pid].name:'Jugador Desconocido', ...s, dif:s.sf-s.sc}));
   rows.sort((a,b)=> b.pg-a.pg || b.dif-a.dif || b.sf-a.sf);
   return rows;
 }
@@ -207,6 +229,11 @@ function renderAdminCorner(){
 }
 function cambiarTab(t){ tab=t; render(); }
 function toggleHistorial(lid){ historialAbierto = historialAbierto===lid ? null : lid; render(); }
+function pickLeague(modo, lid){
+  selectedLeagueId[modo]=lid;
+  localStorage.setItem('padel_sel_'+modo, lid);
+  render();
+}
 
 // ---- Fotos de equipo ----
 function resizeImageFile(file, maxSize){
@@ -246,19 +273,34 @@ function teamPhotoEditor(teamId){
   </label></div>`;
 }
 
-// ---- Competiciones ----
-async function crearCompeticion(modo, name){
+// ---- Jugadores (admin) ----
+async function renombrarJugador(id, newName){
   if(!isAdmin) return;
+  newName=(newName||'').trim(); if(!newName) return;
+  try{ await updateDoc(doc(dbase,"players/"+id), {name:newName}); }
+  catch(err){ showError('No se pudo renombrar al jugador',err); }
+}
+async function eliminarJugador(id){
+  if(!isAdmin) return;
+  if(!confirm('¿Eliminar a este jugador? Si tiene partidos jugados, aparecerá como "Jugador Desconocido" en las estadísticas. No se puede deshacer.')) return;
+  try{ await deleteDoc(doc(dbase,"players/"+id)); }
+  catch(err){ showError('No se pudo eliminar al jugador',err); }
+}
+
+// ---- Competiciones ----
+async function crearCompeticion(modo, name, format){
+  if(!isAdmin) return;
+  format = format==='random' ? 'random' : 'fijo';
   name=(name||'').trim();
   if(!name) name=(modo==='liga'?'Liga ':'Torneo ')+(Object.values(leagues).filter(l=>l.mode===modo).length+1);
   const lid=(modo==='liga'?'lg_':'tn_')+Math.random().toString(36).slice(2,9);
+  selectedLeagueId[modo]=lid;
+  localStorage.setItem('padel_sel_'+modo, lid);
   try{
-    await setDoc(doc(dbase,"leagues/"+lid), {name, mode:modo, phase:'registration', currentRound:0, totalRounds:0, schedule:null, createdAt:Date.now()});
-    await setDoc(doc(dbase,"meta/active"), {[modo]:lid}, {merge:true});
+    await setDoc(doc(dbase,"leagues/"+lid), {name, mode:modo, format, phase:'registration', currentRound:0, totalRounds:0, schedule:null, participants:[], createdAt:Date.now()});
   }catch(err){ showError('No se pudo crear',err); }
 }
-async function crearEquipo(modo, name){
-  const lid=activeLeagueId[modo];
+async function crearEquipo(lid, name){
   if(!name.trim()||!lid) return;
   try{
     const teamId="t_"+Math.random().toString(36).slice(2,9);
@@ -298,9 +340,71 @@ async function eliminarEquipo(teamId){
   if(!confirm('¿Eliminar el equipo "'+t.name+'"?')) return;
   try{ await deleteDoc(doc(dbase,"teams/"+teamId)); }catch(err){ showError('No se pudo eliminar el equipo',err); }
 }
-async function lanzarCompeticion(modo){
-  const lid=activeLeagueId[modo];
-  if(!isAdmin||!lid) return;
+
+// ---- Liga/torneo de parejas rotativas (random) ----
+async function apuntarseLigaRandom(lid){
+  if(!myId) return;
+  try{ await updateDoc(doc(dbase,"leagues/"+lid), {participants: arrayUnion(myId)}); }
+  catch(err){ showError('No se pudo apuntar',err); }
+}
+async function salirLigaRandom(lid){
+  if(!myId) return;
+  try{ await updateDoc(doc(dbase,"leagues/"+lid), {participants: arrayRemove(myId)}); }
+  catch(err){ showError('No se pudo quitar de la lista',err); }
+}
+async function quitarParticipante(lid, pid){
+  if(!isAdmin) return;
+  try{ await updateDoc(doc(dbase,"leagues/"+lid), {participants: arrayRemove(pid)}); }
+  catch(err){ showError('No se pudo quitar al participante',err); }
+}
+async function lanzarLigaRandom(lid){
+  const lg=leagues[lid]; if(!isAdmin||!lg) return;
+  const participants=lg.participants||[];
+  if(participants.length<4){ alert('Hacen falta al menos 4 jugadores apuntados.'); return; }
+  const numRondas=parseInt(prompt('¿Cuántas jornadas quieres generar? (sin repetir pareja de compañero)', String(participants.length-1))||'0');
+  if(!numRondas||numRondas<1) return;
+  const usedPairs=new Set();
+  const schedule=[];
+  for(let r=0;r<numRondas;r++){
+    const result=generarParejasSinRepetir(participants, usedPairs);
+    if(!result) break;
+    result.pairs.forEach(([a,b])=>usedPairs.add(pairKey(a,b)));
+    let pool=result.pairs.slice();
+    for(let i=pool.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [pool[i],pool[j]]=[pool[j],pool[i]]; }
+    const roundMatches=[];
+    while(pool.length>=2){ const pa=pool.shift(), pb=pool.shift(); roundMatches.push({a:pa,b:pb}); }
+    let bye = result.byeId ? [result.byeId] : [];
+    if(pool.length===1) bye = bye.concat(pool[0]);
+    schedule.push({matches:roundMatches, bye});
+  }
+  if(schedule.length===0){ alert('No se ha podido generar ninguna jornada sin repetir pareja con estos jugadores.'); return; }
+  try{
+    await updateDoc(doc(dbase,"leagues/"+lid), {phase:'active', currentRound:0, totalRounds:schedule.length, schedule});
+    await crearPartidosRondaRandom(lid, schedule, 0);
+    if(schedule.length<numRondas) alert('Se han generado '+schedule.length+' jornadas (menos de las '+numRondas+' pedidas): con estos jugadores no se pueden formar más sin repetir compañero.');
+  }catch(err){ showError('No se pudo lanzar',err); }
+}
+async function crearPartidosRondaRandom(lid, schedule, roundIdx){
+  if(roundIdx>=schedule.length) return;
+  const rd=schedule[roundIdx];
+  const teamIdFor = (pair)=> `${lid}_r${roundIdx}_t_${pair.slice().sort().join('_')}`;
+  try{
+    const allPairs=[]; rd.matches.forEach(m=>{ allPairs.push(m.a); allPairs.push(m.b); });
+    await Promise.all(allPairs.map(pair=>{
+      const tid=teamIdFor(pair);
+      const nm=pair.map(pid=>players[pid]?players[pid].name:'Jugador').join(' & ');
+      return setDoc(doc(dbase,"teams/"+tid), {name:nm, players:pair, leagueId:lid, round:roundIdx, ephemeral:true});
+    }));
+    await Promise.all(rd.matches.map(m=>{
+      const ta=teamIdFor(m.a), tb=teamIdFor(m.b);
+      return setDoc(doc(dbase,`matches/${lid}_r${roundIdx}_${ta}_vs_${tb}`), {leagueId:lid, round:roundIdx, teamA:ta, teamB:tb, proposal:null, votes:{}, confirmed:false, played:false, result:null});
+    }));
+  }catch(err){ showError('No se pudieron crear los partidos de la jornada',err); }
+}
+
+async function lanzarCompeticion(lid){
+  const lg=leagues[lid]; if(!isAdmin||!lg) return;
+  if(lg.format==='random'){ return lanzarLigaRandom(lid); }
   const ids=teamsOfLeague(lid).map(([id])=>id);
   if(ids.length<2) return;
   const schedule=roundRobin(ids);
@@ -317,8 +421,8 @@ async function crearPartidosRonda(lid, schedule, roundIdx){
     ));
   }catch(err){ showError('No se pudieron crear los partidos de la ronda',err); }
 }
-async function agregarPartidoManual(modo, teamAId, teamBId){
-  const lid=activeLeagueId[modo]; const lg=lid?leagues[lid]:null;
+async function agregarPartidoManual(lid, teamAId, teamBId){
+  const lg=lid?leagues[lid]:null;
   if(!isAdmin||!lid||!lg) return;
   if(!teamAId||!teamBId||teamAId===teamBId){ alert('Elige dos equipos distintos'); return; }
   try{
@@ -368,17 +472,16 @@ async function checkRondaCompleta(lid){
     try{
       if(next<lg.totalRounds){
         await updateDoc(doc(dbase,"leagues/"+lid), {currentRound:next});
-        await crearPartidosRonda(lid, lg.schedule, next);
+        if(lg.format==='random'){ await crearPartidosRondaRandom(lid, lg.schedule, next); }
+        else { await crearPartidosRonda(lid, lg.schedule, next); }
       } else {
         await updateDoc(doc(dbase,"leagues/"+lid), {phase:'finished'});
       }
     }catch(err){ showError('No se pudo avanzar de ronda',err); }
   }
 }
-async function retrocederRonda(modo){
-  const lid=activeLeagueId[modo];
-  if(!isAdmin||!lid) return;
-  const lg=leagues[lid]; if(!lg) return;
+async function retrocederRonda(lid){
+  const lg=leagues[lid]; if(!isAdmin||!lg) return;
   if(lg.phase==='registration'){ alert('Todavía no ha empezado.'); return; }
   if(lg.phase==='finished'){
     if(!confirm('¿Reabrir la última ronda para corregir un resultado?')) return;
@@ -394,20 +497,7 @@ async function retrocederRonda(modo){
     await updateDoc(doc(dbase,"leagues/"+lid), {currentRound: lg.currentRound-1});
   }catch(err){ showError('No se pudo retroceder de ronda',err); }
 }
-async function renombrarJugador(id, newName){
-  if(!isAdmin) return;
-  newName=(newName||'').trim(); if(!newName) return;
-  try{ await updateDoc(doc(dbase,"players/"+id), {name:newName}); }
-  catch(err){ showError('No se pudo renombrar al jugador',err); }
-}
-async function eliminarJugador(id){
-  if(!isAdmin) return;
-  if(!confirm('¿Eliminar a este jugador? Si tiene partidos jugados, aparecerá como "Jugador Desconocido" en las estadísticas. No se puede deshacer.')) return;
-  try{ await deleteDoc(doc(dbase,"players/"+id)); }
-  catch(err){ showError('No se pudo eliminar al jugador',err); }
-}
-async function eliminarCompeticion(modo){
-  const lid=activeLeagueId[modo];
+async function eliminarCompeticion(modo, lid){
   if(!isAdmin||!lid) return;
   if(!confirm('¿Eliminar est'+(modo==='liga'?'a liga':'e torneo')+' (sus equipos y partidos)? El historial no se toca. No se puede deshacer.')) return;
   try{
@@ -418,7 +508,7 @@ async function eliminarCompeticion(modo){
       ...mds.map(id=>deleteDoc(doc(dbase,"matches/"+id)))
     ]);
     await deleteDoc(doc(dbase,"leagues/"+lid));
-    await updateDoc(doc(dbase,"meta/active"), {[modo]:null}).catch(()=>{});
+    if(selectedLeagueId[modo]===lid){ selectedLeagueId[modo]=null; localStorage.removeItem('padel_sel_'+modo); }
   }catch(err){ showError('No se pudo eliminar',err); }
 }
 
@@ -443,12 +533,13 @@ function renderHistorial(){
     const texto = lg.phase==='finished'?'Terminad'+(lg.mode==='liga'?'a':'o'):(lg.phase==='active'?'En curso':'Registro');
     h += `<div class="card">
       <div class="row" style="justify-content:space-between;cursor:pointer" onclick="toggleHistorial('${lid}')">
-        <span><b>${esc(lg.name||lid)}</b> <span class="badge">${lg.mode==='torneo'?'Torneo':'Liga'}</span></span>
+        <span><b>${esc(lg.name||lid)}</b> <span class="badge">${lg.mode==='torneo'?'Torneo':'Liga'}</span>${lg.format==='random'?' <span class="badge">Random</span>':''}</span>
         <span class="badge ${estado}">${texto}</span>
       </div>`;
     if(open){
-      h += `<h2 style="margin:12px 0 8px">Clasificación</h2><table><tr><th>Equipo</th><th>PJ</th><th>G</th><th>P</th><th>Sets</th><th>Dif</th></tr>`;
-      standingsFor(lid).forEach(r=>{ h+=`<tr><td>${teamAvatar(r.id)}${esc(r.name)}</td><td>${r.pj}</td><td>${r.pg}</td><td>${r.pp}</td><td>${r.sf}-${r.sc}</td><td>${r.dif>0?'+':''}${r.dif}</td></tr>`; });
+      const rows = lg.format==='random' ? standingsPlayers(lid) : standingsFor(lid);
+      h += `<h2 style="margin:12px 0 8px">Clasificación</h2><table><tr><th>${lg.format==='random'?'Jugador':'Equipo'}</th><th>PJ</th><th>G</th><th>P</th><th>Sets</th><th>Dif</th></tr>`;
+      rows.forEach(r=>{ h+=`<tr><td>${teamAvatar(r.id)}${esc(r.name)}</td><td>${r.pj}</td><td>${r.pg}</td><td>${r.pp}</td><td>${r.sf}-${r.sc}</td><td>${r.dif>0?'+':''}${r.dif}</td></tr>`; });
       h += `</table>`;
       const ms=matchesOfLeague(lid).map(([,m])=>m).sort((a,b)=>a.round-b.round);
       if(ms.length){
@@ -491,35 +582,40 @@ function renderMisPartidos(){
 }
 
 function renderCompeticion(modo){
-  const lid = activeLeagueId[modo];
+  const list = Object.entries(leagues).filter(([,l])=>l.mode===modo).sort((a,b)=>(b[1].createdAt||0)-(a[1].createdAt||0));
+  let lid = selectedLeagueId[modo];
+  if(!lid || !leagues[lid] || leagues[lid].mode!==modo){
+    lid = list.length ? list[0][0] : null;
+    if(lid){ selectedLeagueId[modo]=lid; localStorage.setItem('padel_sel_'+modo, lid); }
+  }
   const lg = lid ? leagues[lid] : null;
   const label = modo==='liga' ? 'liga' : 'torneo';
   const Label = modo==='liga' ? 'Liga' : 'Torneo';
+  const esRandom = lg && lg.format==='random';
   let html='';
+
+  if(list.length>1){
+    html += `<div class="row" style="margin-bottom:10px">`;
+    list.forEach(([id,l])=>{
+      const estado=l.phase==='finished'?'ok':(l.phase==='active'?'warn':'');
+      const texto=l.phase==='finished'?'Terminad'+(modo==='liga'?'a':'o'):(l.phase==='active'?'En curso':'Registro');
+      html += `<button class="small ${id===lid?'':'secondary'}" onclick="pickLeague('${modo}','${id}')">${esc(l.name)}${l.format==='random'?' 🎲':''} <span class="badge ${estado}">${texto}</span></button>`;
+    });
+    html += `</div>`;
+  }
 
   if(isAdmin){
     html += `<div class="card"><h2 style="margin-top:0">Panel de admin</h2>`;
     if(!lg){
-      html += `<p class="muted">Todavía no hay ning${modo==='liga'?'una liga activa':'ún torneo activo'}.</p>
-      <div class="row"><input type="text" id="compInput_${modo}" placeholder="Nombre d${modo==='liga'?'e la liga':'el torneo'} (opcional)"></div>
-      <div style="margin-top:8px"><button onclick="crearCompeticion('${modo}', document.getElementById('compInput_${modo}').value)">Crear ${label}</button></div>`;
+      html += `<p class="muted">Todavía no hay ning${modo==='liga'?'una liga':'ún torneo'} creado.</p>`;
     } else if(lg.phase==='registration'){
-      html += `<p class="muted">${teamsOfLeague(lid).length} equipos registrados en "${esc(lg.name)}".</p>
-      <button onclick="lanzarCompeticion('${modo}')" ${teamsOfLeague(lid).length<2?'disabled':''}>Lanzar ${label}</button>`;
+      const count = esRandom ? (lg.participants||[]).length : teamsOfLeague(lid).length;
+      html += `<p class="muted">${count} ${esRandom?'jugadores apuntados':'equipos registrados'} en "${esc(lg.name)}"${esRandom?' (parejas rotativas)':''}.</p>
+      <button onclick="lanzarCompeticion('${lid}')" ${count<(esRandom?4:2)?'disabled':''}>Lanzar ${label}</button>`;
     } else {
-      html += `<p class="muted">${esc(lg.name)} — ${lg.phase==='finished'?'terminad'+(modo==='liga'?'a':'o'):'en curso'} (ronda ${lg.currentRound+1} de ${lg.totalRounds}).</p>
-      <div class="row">
-        <button class="secondary" onclick="retrocederRonda('${modo}')">${lg.phase==='finished'?'Reabrir última ronda':'Retroceder ronda'}</button>
-        ${lg.phase==='finished'?`<button onclick="document.getElementById('nuevoBox_${modo}').style.display='flex'">Crear nuev${modo==='liga'?'a liga':'o torneo'}</button>`:''}
-      </div>`;
-      if(lg.phase==='finished'){
-        html += `<div id="nuevoBox_${modo}" class="row" style="display:none;margin-top:10px">
-          <input type="text" id="compInput2_${modo}" placeholder="Nombre">
-          <button class="small" onclick="crearCompeticion('${modo}', document.getElementById('compInput2_${modo}').value)">Crear</button>
-        </div>`;
-      }
+      html += `<p class="muted">${esc(lg.name)}${esRandom?' 🎲':''} — ${lg.phase==='finished'?'terminad'+(modo==='liga'?'a':'o'):'en curso'} (ronda ${lg.currentRound+1} de ${lg.totalRounds}).</p>
+      <button class="secondary" onclick="retrocederRonda('${lid}')">${lg.phase==='finished'?'Reabrir última ronda':'Retroceder ronda'}</button>`;
       if(lg.phase==='active'){
-        const rt=teamsOfLeague(lid);
         html += `<div style="margin-top:14px;border-top:1px solid var(--border);padding-top:10px">
           <button class="small secondary" onclick="const b=document.getElementById('calBox_${modo}'); b.style.display=b.style.display==='block'?'none':'block'">Editar calendario de esta ronda</button>
           <div id="calBox_${modo}" style="display:none;margin-top:10px">
@@ -530,14 +626,30 @@ function renderCompeticion(modo){
             <button class="small secondary" style="border-color:var(--danger);color:var(--danger)" onclick="eliminarPartido('${mid}')">Eliminar</button>
           </div>`;
         });
-        html += `<div class="row" style="margin-top:8px">
+        if(!esRandom){
+          const rt=teamsOfLeague(lid);
+          html += `<div class="row" style="margin-top:8px">
               <select id="selA_${modo}">${rt.map(([id,t])=>`<option value="${id}">${esc(t.name)}</option>`).join('')}</select>
               <select id="selB_${modo}">${rt.map(([id,t])=>`<option value="${id}">${esc(t.name)}</option>`).join('')}</select>
-              <button class="small" onclick="agregarPartidoManual('${modo}', document.getElementById('selA_${modo}').value, document.getElementById('selB_${modo}').value)">Añadir partido</button>
-            </div>
-          </div></div>`;
+              <button class="small" onclick="agregarPartidoManual('${lid}', document.getElementById('selA_${modo}').value, document.getElementById('selB_${modo}').value)">Añadir partido</button>
+            </div>`;
+        } else {
+          html += `<p class="muted">En modo random solo puedes quitar partidos aquí; para formar una pareja nueva, usa "Retroceder ronda" y vuelve a lanzar.</p>`;
+        }
+        html += `</div></div>`;
       }
     }
+    html += `<div style="margin-top:14px;border-top:1px solid var(--border);padding-top:10px">
+      <button class="small secondary" onclick="const b=document.getElementById('nuevoBox_${modo}'); b.style.display=b.style.display==='flex'?'none':'flex'">+ Crear otr${modo==='liga'?'a liga':'o torneo'}</button>
+      <div id="nuevoBox_${modo}" class="row" style="display:none;margin-top:10px">
+        <input type="text" id="compInput2_${modo}" placeholder="Nombre">
+        <select id="formatoInput_${modo}">
+          <option value="fijo">Equipos fijos</option>
+          <option value="random">Parejas rotativas (random)</option>
+        </select>
+        <button class="small" onclick="crearCompeticion('${modo}', document.getElementById('compInput2_${modo}').value, document.getElementById('formatoInput_${modo}').value)">Crear</button>
+      </div>
+    </div>`;
     const dbgOn=localStorage.getItem('padel_debug')==='1';
     html += `<div class="row" style="margin-top:10px;border-top:1px solid var(--border);padding-top:10px">
       <label class="muted" style="display:flex;align-items:center;gap:6px;cursor:pointer">
@@ -546,7 +658,7 @@ function renderCompeticion(modo){
     </div>`;
   }
 
-  if(isAdmin && lg){
+  if(isAdmin && lg && !esRandom){
     const assigned=new Set(teamsOfLeague(lid).flatMap(([,t])=>t.players));
     const sinEquipo=Object.entries(players).filter(([id])=>!assigned.has(id));
     html += `<div class="card"><h2 style="margin-top:0">Equipos y jugadores de "${esc(lg.name)}"</h2>`;
@@ -568,7 +680,19 @@ function renderCompeticion(modo){
     });
     if(sinEquipo.length) html += `<p class="muted" style="margin-top:10px">Sin equipo: ${sinEquipo.map(([id,p])=>esc(p.name)).join(', ')}</p>`;
     html += `<div style="margin-top:14px;border-top:1px solid var(--border);padding-top:10px">
-      <button class="secondary" style="border-color:var(--danger);color:var(--danger)" onclick="eliminarCompeticion('${modo}')">Eliminar est${modo==='liga'?'a liga':'e torneo'}</button>
+      <button class="secondary" style="border-color:var(--danger);color:var(--danger)" onclick="eliminarCompeticion('${modo}','${lid}')">Eliminar est${modo==='liga'?'a liga':'e torneo'}</button>
+    </div></div>`;
+  }
+  if(isAdmin && lg && esRandom){
+    html += `<div class="card"><h2 style="margin-top:0">Participantes de "${esc(lg.name)}"</h2>`;
+    const parts=lg.participants||[];
+    if(parts.length===0) html += `<p class="muted">Nadie apuntado todavía.</p>`;
+    parts.forEach(pid=>{
+      const nm = players[pid]?esc(players[pid].name):'Jugador Desconocido';
+      html += `<div class="row" style="justify-content:space-between;margin-bottom:4px"><span>${nm}</span>${lg.phase==='registration'?`<button class="small secondary" style="border-color:var(--danger);color:var(--danger)" onclick="quitarParticipante('${lid}','${pid}')">Quitar</button>`:''}</div>`;
+    });
+    html += `<div style="margin-top:14px;border-top:1px solid var(--border);padding-top:10px">
+      <button class="secondary" style="border-color:var(--danger);color:var(--danger)" onclick="eliminarCompeticion('${modo}','${lid}')">Eliminar est${modo==='liga'?'a liga':'e torneo'}</button>
     </div></div>`;
   }
 
@@ -588,38 +712,59 @@ function renderCompeticion(modo){
     return html;
   }
 
-  const myTid = myTeamIdIn(lid);
-  if(!myTid){
-    const open=teamsOfLeague(lid).filter(([id,t])=>t.players.length<2);
-    html += `<p class="muted">Hola ${esc(me.name)}. Crea un equipo o únete a uno existente en "${esc(lg.name)}".</p>
-    <div class="card">
-      <h2 style="margin-top:0">Crear equipo</h2>
-      <div class="row"><input type="text" id="teamInput_${modo}" placeholder="Nombre del equipo"></div>
-      <div style="margin-top:8px"><button onclick="crearEquipo('${modo}', document.getElementById('teamInput_${modo}').value)">Crear</button></div>
-    </div>
-    <div class="card"><h2 style="margin-top:0">Unirse a un equipo</h2>`;
-    if(open.length===0) html += `<p class="muted">No hay equipos con hueco libre.</p>`;
-    open.forEach(([id,t])=>{
-      html += `<div class="row" style="justify-content:space-between;margin-bottom:6px">
-        <span>${teamAvatar(id)}${esc(t.name)} <span class="badge">${t.players.length}/2</span></span>
-        <button class="small" onclick="unirseEquipo('${id}')">Unirme</button></div>`;
-    });
-    html += `</div>`;
-    return html;
+  // ---- Formato random: apuntarse / clasificación individual / pareja de la ronda ----
+  if(esRandom){
+    const apuntado=(lg.participants||[]).includes(myId);
+    if(lg.phase==='registration'){
+      html += `<div class="card"><p class="muted">Esta ${label} forma parejas nuevas cada jornada: no hay equipo fijo, solo apúntate.</p>
+        ${apuntado
+          ? `<p>Estás apuntado ✅</p><button class="small secondary" onclick="salirLigaRandom('${lid}')">Darme de baja</button>`
+          : `<button onclick="apuntarseLigaRandom('${lid}')">Apuntarme</button>`}
+      </div>`;
+      return html;
+    }
+    const myTid = myTeamIdInRound(lid, lg.currentRound);
+    html += `<h2>Clasificación individual</h2><div class="card"><table><tr><th>Jugador</th><th>PJ</th><th>G</th><th>P</th><th>Sets</th><th>Dif</th></tr>`;
+    standingsPlayers(lid).forEach(r=>{ html += `<tr><td>${esc(r.name)}${r.id===myId?' <span class="badge ok">tú</span>':''}</td><td>${r.pj}</td><td>${r.pg}</td><td>${r.pp}</td><td>${r.sf}-${r.sc}</td><td>${r.dif>0?'+':''}${r.dif}</td></tr>`; });
+    html += `</table></div>`;
+    html += `<h2>Jornada ${lg.currentRound+1} de ${lg.totalRounds}</h2>`;
+    if(!myTid){
+      const byeHere=(lg.schedule[lg.currentRound].bye||[]).includes(myId);
+      if(byeHere) html += `<div class="card muted">Esta jornada descansas.</div>`;
+    }
+  } else {
+    const myTid = myTeamIdIn(lid);
+    if(!myTid){
+      const open=teamsOfLeague(lid).filter(([id,t])=>t.players.length<2);
+      html += `<p class="muted">Hola ${esc(me.name)}. Crea un equipo o únete a uno existente en "${esc(lg.name)}".</p>
+      <div class="card">
+        <h2 style="margin-top:0">Crear equipo</h2>
+        <div class="row"><input type="text" id="teamInput_${modo}" placeholder="Nombre del equipo"></div>
+        <div style="margin-top:8px"><button onclick="crearEquipo('${lid}', document.getElementById('teamInput_${modo}').value)">Crear</button></div>
+      </div>
+      <div class="card"><h2 style="margin-top:0">Unirse a un equipo</h2>`;
+      if(open.length===0) html += `<p class="muted">No hay equipos con hueco libre.</p>`;
+      open.forEach(([id,t])=>{
+        html += `<div class="row" style="justify-content:space-between;margin-bottom:6px">
+          <span>${teamAvatar(id)}${esc(t.name)} <span class="badge">${t.players.length}/2</span></span>
+          <button class="small" onclick="unirseEquipo('${id}')">Unirme</button></div>`;
+      });
+      html += `</div>`;
+      return html;
+    }
+    if(lg.phase==='registration'){
+      html += `<div class="card">${teamPhotoEditor(myTid)}<p class="muted">Esperando a que el admin lance "${esc(lg.name)}". Tu equipo: <b>${esc(teamName(myTid))}</b></p>
+        <button class="small secondary" onclick="salirDeEquipo('${myTid}')">Cambiar de equipo</button></div>`;
+      return html;
+    }
+    html += `<div class="card">${teamPhotoEditor(myTid)}</div>`;
+    html += `<h2>Clasificación</h2><div class="card"><table><tr><th>Equipo</th><th>PJ</th><th>G</th><th>P</th><th>Sets</th><th>Dif</th></tr>`;
+    standingsFor(lid).forEach(r=>{ html += `<tr><td>${teamAvatar(r.id)}${esc(r.name)}${r.id===myTid?' <span class="badge ok">tú</span>':''}</td><td>${r.pj}</td><td>${r.pg}</td><td>${r.pp}</td><td>${r.sf}-${r.sc}</td><td>${r.dif>0?'+':''}${r.dif}</td></tr>`; });
+    html += `</table></div>`;
+    html += `<h2>Ronda ${lg.currentRound+1} de ${lg.totalRounds}</h2>`;
   }
 
-  if(lg.phase==='registration'){
-    html += `<div class="card">${teamPhotoEditor(myTid)}<p class="muted">Esperando a que el admin lance "${esc(lg.name)}". Tu equipo: <b>${esc(teamName(myTid))}</b></p>
-      <button class="small secondary" onclick="salirDeEquipo('${myTid}')">Cambiar de equipo</button></div>`;
-    return html;
-  }
-
-  html += `<div class="card">${teamPhotoEditor(myTid)}</div>`;
-  html += `<h2>Clasificación</h2><div class="card"><table><tr><th>Equipo</th><th>PJ</th><th>G</th><th>P</th><th>Sets</th><th>Dif</th></tr>`;
-  standingsFor(lid).forEach(r=>{ html += `<tr><td>${teamAvatar(r.id)}${esc(r.name)}${r.id===myTid?' <span class="badge ok">tú</span>':''}</td><td>${r.pj}</td><td>${r.pg}</td><td>${r.pp}</td><td>${r.sf}-${r.sc}</td><td>${r.dif>0?'+':''}${r.dif}</td></tr>`; });
-  html += `</table></div>`;
-
-  html += `<h2>Ronda ${lg.currentRound+1} de ${lg.totalRounds}</h2>`;
+  const myTid = esRandom ? myTeamIdInRound(lid, lg.currentRound) : myTeamIdIn(lid);
   const roundMatches=matchesOfLeague(lid).filter(([id,m])=>m.round===lg.currentRound);
   if(roundMatches.length===0) html += `<div class="card muted">Generando partidos…</div>`;
   roundMatches.forEach(([id,m])=>{
@@ -708,6 +853,8 @@ window.retrocederRonda=retrocederRonda; window.cambiarTab=cambiarTab; window.tog
 window.salirAdmin=salirAdmin; window.subirFotoEquipo=subirFotoEquipo; window.agregarPartidoManual=agregarPartidoManual; window.eliminarPartido=eliminarPartido;
 window.renombrarJugador=renombrarJugador; window.eliminarJugador=eliminarJugador;
 window.salirDeEquipo=salirDeEquipo; window.renombrarEquipo=renombrarEquipo; window.quitarJugadorDeEquipo=quitarJugadorDeEquipo;
+window.pickLeague=pickLeague; window.apuntarseLigaRandom=apuntarseLigaRandom; window.salirLigaRandom=salirLigaRandom;
+window.quitarParticipante=quitarParticipante;
 </script>
 </body>
 </html>
