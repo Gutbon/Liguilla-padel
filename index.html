@@ -86,7 +86,6 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/fireba
 import { getFirestore, doc, setDoc, updateDoc, deleteDoc, onSnapshot, collection, arrayUnion, arrayRemove } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 
-// ⚠️ PEGA AQUÍ TU CONFIG DE FIREBASE (Configuración del proyecto > Tus apps > Web)
 const firebaseConfig = {
   apiKey: "AIzaSyC3LfAgcreb_MNVdaWzOvrjUfIk05MRxt0",
   authDomain: "padel-37110.firebaseapp.com",
@@ -138,24 +137,38 @@ function roundRobin(teamIds){
   return rounds;
 }
 function pairKey(a,b){ return [a,b].sort().join('|'); }
+function sidePriority(s1,s2){
+  const a=s1||'indiferente', b=s2||'indiferente';
+  if((a==='derecha'&&b==='reves')||(a==='reves'&&b==='derecha')) return 0;
+  if(a==='indiferente'&&b==='indiferente') return 2;
+  if(a==='indiferente'||b==='indiferente') return 1;
+  return 3; // dos derechas o dos reveses
+}
 function generarParejasSinRepetir(playerIds, usedPairs){
-  const maxAttempts=500;
+  const maxAttempts=300;
+  let best=null, bestScore=Infinity;
   for(let attempt=0; attempt<maxAttempts; attempt++){
     let ids=playerIds.slice();
     for(let i=ids.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [ids[i],ids[j]]=[ids[j],ids[i]]; }
     let byeId=null;
     if(ids.length%2!==0){ byeId=ids.pop(); }
-    let pool=ids.slice(), pairs=[], ok=true;
+    let pool=ids.slice(), pairs=[], ok=true, score=0;
     while(pool.length>0){
       const a=pool.shift();
-      const idx=pool.findIndex(b=>!usedPairs.has(pairKey(a,b)));
-      if(idx===-1){ ok=false; break; }
-      const b=pool.splice(idx,1)[0];
-      pairs.push([a,b]);
+      const candidatos = pool
+        .map((b,idx)=>({b,idx,pri:sidePriority(players[a]&&players[a].side, players[b]&&players[b].side)}))
+        .filter(c=>!usedPairs.has(pairKey(a,c.b)));
+      if(candidatos.length===0){ ok=false; break; }
+      const mejorPri = Math.min(...candidatos.map(c=>c.pri));
+      const tier = candidatos.filter(c=>c.pri===mejorPri);
+      const elegido = tier[Math.floor(Math.random()*tier.length)];
+      pool.splice(elegido.idx,1);
+      pairs.push([a, elegido.b]);
+      score += elegido.pri;
     }
-    if(ok) return {pairs, byeId};
+    if(ok && score<bestScore){ bestScore=score; best={pairs, byeId}; if(bestScore===0) break; }
   }
-  return null;
+  return best;
 }
 
 // ---- Helpers ----
@@ -165,17 +178,21 @@ function myTeamIdIn(lid){ const f=teamsOfLeague(lid).find(([id,t])=>t.players.in
 function myTeamIdInRound(lid, round){ const f=teamsOfLeague(lid).find(([id,t])=>t.round===round && t.players.includes(myId)); return f?f[0]:null; }
 function teamName(id){ return id && teams[id] ? teams[id].name : '—'; }
 function teamAvatar(id){ const t=id&&teams[id]; return (t&&t.photo) ? `<img class="avatar" src="${t.photo}">` : ''; }
+function setsTxt(result){ return (result.sets&&result.sets.length) ? result.sets.map(s=>s.a+'-'+s.b).join(', ') : `${result.setsA} - ${result.setsB}`; }
 function standingsFor(lid){
   const rows = teamsOfLeague(lid).map(([id,t])=>{
     const played = matchesOfLeague(lid).map(([,m])=>m).filter(m=>m.played&&(m.teamA===id||m.teamB===id));
     const wins = played.filter(m=>m.result.winner===id).length;
-    let sf=0, sc=0;
+    let sf=0,sc=0,gf=0,gc=0;
     played.forEach(m=>{
-      if(m.teamA===id){ sf+=m.result.setsA; sc+=m.result.setsB; } else { sf+=m.result.setsB; sc+=m.result.setsA; }
+      const soyA=m.teamA===id;
+      sf += soyA?m.result.setsA:m.result.setsB;
+      sc += soyA?m.result.setsB:m.result.setsA;
+      (m.result.sets||[]).forEach(s=>{ gf+= soyA?s.a:s.b; gc+= soyA?s.b:s.a; });
     });
-    return {id, name:t.name, pj:played.length, pg:wins, pp:played.length-wins, sf, sc, dif:sf-sc};
+    return {id, name:t.name, pj:played.length, pg:wins, pp:played.length-wins, sf, sc, dif:sf-sc, gdif:gf-gc};
   });
-  rows.sort((a,b)=> b.pg-a.pg || b.dif-a.dif || b.sf-a.sf);
+  rows.sort((a,b)=> b.pg-a.pg || b.dif-a.dif || b.gdif-a.gdif || b.sf-a.sf);
   return rows;
 }
 function standingsPlayers(lid){
@@ -184,32 +201,40 @@ function standingsPlayers(lid){
     if(!m.played) return;
     const ta=teams[m.teamA]?.players||[], tb=teams[m.teamB]?.players||[];
     ta.forEach(pid=>{
-      stats[pid]=stats[pid]||{pj:0,pg:0,pp:0,sf:0,sc:0};
+      stats[pid]=stats[pid]||{pj:0,pg:0,pp:0,sf:0,sc:0,gf:0,gc:0};
       stats[pid].pj++; stats[pid].sf+=m.result.setsA; stats[pid].sc+=m.result.setsB;
+      (m.result.sets||[]).forEach(s=>{ stats[pid].gf+=s.a; stats[pid].gc+=s.b; });
       if(m.result.winner===m.teamA) stats[pid].pg++; else stats[pid].pp++;
     });
     tb.forEach(pid=>{
-      stats[pid]=stats[pid]||{pj:0,pg:0,pp:0,sf:0,sc:0};
+      stats[pid]=stats[pid]||{pj:0,pg:0,pp:0,sf:0,sc:0,gf:0,gc:0};
       stats[pid].pj++; stats[pid].sf+=m.result.setsB; stats[pid].sc+=m.result.setsA;
+      (m.result.sets||[]).forEach(s=>{ stats[pid].gf+=s.b; stats[pid].gc+=s.a; });
       if(m.result.winner===m.teamB) stats[pid].pg++; else stats[pid].pp++;
     });
   });
-  const rows=Object.entries(stats).map(([pid,s])=>({id:pid, name: players[pid]?players[pid].name:'Jugador Desconocido', ...s, dif:s.sf-s.sc}));
-  rows.sort((a,b)=> b.pg-a.pg || b.dif-a.dif || b.sf-a.sf);
+  const rows=Object.entries(stats).map(([pid,s])=>({id:pid, name: players[pid]?players[pid].name:'Jugador Desconocido', ...s, dif:s.sf-s.sc, gdif:s.gf-s.gc}));
+  rows.sort((a,b)=> b.pg-a.pg || b.dif-a.dif || b.gdif-a.gdif || b.sf-a.sf);
   return rows;
 }
 
 // ---- Login ----
-async function entrarConNombre(name){
+async function entrarConNombre(name, side){
   name=(name||'').trim(); if(!name) return;
+  side = ['derecha','reves','indiferente'].includes(side) ? side : 'indiferente';
   const slug=name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'');
   if(!slug){ alert('Pon un nombre válido'); return; }
   myId=slug;
   localStorage.setItem('padel_myid', slug);
   localStorage.setItem('padel_myname', name);
-  try{ await setDoc(doc(dbase,"players/"+slug), {name}, {merge:true}); }
+  try{ await setDoc(doc(dbase,"players/"+slug), {name, side}, {merge:true}); }
   catch(err){ showError('No se pudo entrar',err); }
   render();
+}
+async function actualizarLado(newSide){
+  if(!myId) return;
+  try{ await updateDoc(doc(dbase,"players/"+myId), {side:newSide}); }
+  catch(err){ showError('No se pudo actualizar tu lado',err); }
 }
 function cerrarSesion(){
   localStorage.removeItem('padel_myid'); localStorage.removeItem('padel_myname');
@@ -274,10 +299,12 @@ function teamPhotoEditor(teamId){
 }
 
 // ---- Jugadores (admin) ----
-async function renombrarJugador(id, newName){
+async function renombrarJugador(id, newName, newSide){
   if(!isAdmin) return;
   newName=(newName||'').trim(); if(!newName) return;
-  try{ await updateDoc(doc(dbase,"players/"+id), {name:newName}); }
+  const data={name:newName};
+  if(['derecha','reves','indiferente'].includes(newSide)) data.side=newSide;
+  try{ await updateDoc(doc(dbase,"players/"+id), data); }
   catch(err){ showError('No se pudo renombrar al jugador',err); }
 }
 async function eliminarJugador(id){
@@ -397,7 +424,7 @@ async function crearPartidosRondaRandom(lid, schedule, roundIdx){
     }));
     await Promise.all(rd.matches.map(m=>{
       const ta=teamIdFor(m.a), tb=teamIdFor(m.b);
-      return setDoc(doc(dbase,`matches/${lid}_r${roundIdx}_${ta}_vs_${tb}`), {leagueId:lid, round:roundIdx, teamA:ta, teamB:tb, proposal:null, votes:{}, confirmed:false, played:false, result:null});
+      return setDoc(doc(dbase,`matches/${lid}_r${roundIdx}_${ta}_vs_${tb}`), {leagueId:lid, round:roundIdx, teamA:ta, teamB:tb, proposal:null, votes:{}, confirmed:false, played:false, pendingResult:null, result:null});
     }));
   }catch(err){ showError('No se pudieron crear los partidos de la jornada',err); }
 }
@@ -417,7 +444,7 @@ async function crearPartidosRonda(lid, schedule, roundIdx){
   if(roundIdx>=schedule.length) return;
   try{
     await Promise.all(schedule[roundIdx].matches.map(({a,b})=>
-      setDoc(doc(dbase,`matches/${lid}_r${roundIdx}_${a}_${b}`), {leagueId:lid, round:roundIdx, teamA:a, teamB:b, proposal:null, votes:{}, confirmed:false, played:false, result:null})
+      setDoc(doc(dbase,`matches/${lid}_r${roundIdx}_${a}_${b}`), {leagueId:lid, round:roundIdx, teamA:a, teamB:b, proposal:null, votes:{}, confirmed:false, played:false, pendingResult:null, result:null})
     ));
   }catch(err){ showError('No se pudieron crear los partidos de la ronda',err); }
 }
@@ -426,7 +453,7 @@ async function agregarPartidoManual(lid, teamAId, teamBId){
   if(!isAdmin||!lid||!lg) return;
   if(!teamAId||!teamBId||teamAId===teamBId){ alert('Elige dos equipos distintos'); return; }
   try{
-    await setDoc(doc(dbase,`matches/${lid}_r${lg.currentRound}_${teamAId}_${teamBId}`), {leagueId:lid, round:lg.currentRound, teamA:teamAId, teamB:teamBId, proposal:null, votes:{}, confirmed:false, played:false, result:null});
+    await setDoc(doc(dbase,`matches/${lid}_r${lg.currentRound}_${teamAId}_${teamBId}`), {leagueId:lid, round:lg.currentRound, teamA:teamAId, teamB:teamBId, proposal:null, votes:{}, confirmed:false, played:false, pendingResult:null, result:null});
   }catch(err){ showError('No se pudo añadir el partido',err); }
 }
 async function eliminarPartido(matchId){
@@ -447,19 +474,40 @@ async function votarOk(matchId, m){
     await updateDoc(doc(dbase,"matches/"+matchId), {votes, confirmed});
   }catch(err){ showError('No se pudo votar',err); }
 }
-async function guardarResultado(matchId, m, sA, sB){
-  sA=parseInt(sA); sB=parseInt(sB);
-  if(isNaN(sA)||isNaN(sB)||sA===sB) return;
-  const winner = sA>sB? m.teamA : m.teamB;
+function leerSets(id){
+  const out=[];
+  for(let n=1;n<=3;n++){ out.push({a:document.getElementById('s'+n+'a_'+id).value, b:document.getElementById('s'+n+'b_'+id).value}); }
+  return out;
+}
+async function proponerResultado(matchId, m, setsInputs){
+  const sets=[];
+  for(const {a,b} of setsInputs){
+    if(a===''&&b==='') continue;
+    const na=parseInt(a), nb=parseInt(b);
+    if(isNaN(na)||isNaN(nb)||na===nb){ alert('Revisa los sets: cada set jugado necesita un marcador válido y sin empate.'); return; }
+    sets.push({a:na,b:nb});
+  }
+  if(sets.length===0){ alert('Introduce al menos un set.'); return; }
+  const setsA=sets.filter(s=>s.a>s.b).length;
+  const setsB=sets.filter(s=>s.b>s.a).length;
+  if(setsA===setsB){ alert('Está empatado en sets, revisa el marcador.'); return; }
+  const proposedByTeam = (teams[m.teamA]&&teams[m.teamA].players.includes(myId)) ? m.teamA : m.teamB;
+  try{ await updateDoc(doc(dbase,"matches/"+matchId), {pendingResult:{sets, setsA, setsB, proposedByTeam}}); }
+  catch(err){ showError('No se pudo proponer el resultado',err); }
+}
+async function confirmarResultado(matchId, m){
+  if(!m.pendingResult) return;
+  const pr=m.pendingResult;
+  const winner = pr.setsA>pr.setsB ? m.teamA : m.teamB;
   try{
-    await updateDoc(doc(dbase,"matches/"+matchId), {played:true, result:{setsA:sA, setsB:sB, winner}});
+    await updateDoc(doc(dbase,"matches/"+matchId), {played:true, result:{sets:pr.sets, setsA:pr.setsA, setsB:pr.setsB, winner}, pendingResult:null});
     await checkRondaCompleta(m.leagueId);
-  }catch(err){ showError('No se pudo guardar el resultado',err); }
+  }catch(err){ showError('No se pudo confirmar el resultado',err); }
 }
 async function reiniciarPartido(matchId){
   if(!isAdmin) return;
   if(!confirm('¿Reiniciar este partido? Se borra la fecha propuesta, los votos y el resultado.')) return;
-  try{ await updateDoc(doc(dbase,"matches/"+matchId), {proposal:null, votes:{}, confirmed:false, played:false, result:null}); }
+  try{ await updateDoc(doc(dbase,"matches/"+matchId), {proposal:null, votes:{}, confirmed:false, played:false, pendingResult:null, result:null}); }
   catch(err){ showError('No se pudo reiniciar el partido',err); }
 }
 async function checkRondaCompleta(lid){
@@ -512,14 +560,42 @@ async function eliminarCompeticion(modo, lid){
   }catch(err){ showError('No se pudo eliminar',err); }
 }
 
+function matchResultBlock(id, m, myTid){
+  const setInputsHtml = `<div style="margin-top:8px">`+[1,2,3].map(n=>
+    `<div class="row" style="margin-bottom:4px"><span class="muted" style="width:46px">Set ${n}</span><input type="number" id="s${n}a_${id}" style="max-width:70px"><span class="muted">-</span><input type="number" id="s${n}b_${id}" style="max-width:70px"></div>`
+  ).join('')+`</div>`;
+  if(m.pendingResult){
+    const pr=m.pendingResult;
+    const soyProponente = pr.proposedByTeam===myTid;
+    const txt = (pr.sets||[]).map(s=>s.a+'-'+s.b).join(', ');
+    let h = `<p>Propuesto por ${esc(teamName(pr.proposedByTeam))}: <b>${txt}</b> (${pr.setsA}-${pr.setsB} en sets)</p>`;
+    if(soyProponente){
+      h += `<p class="muted">Esperando a que el equipo rival lo confirme.</p>`;
+    } else {
+      h += `<div class="row"><button class="small" onclick="confirmarResultado('${id}', ${JSON.stringify(m).replace(/"/g,'&quot;')})">Confirmar resultado</button></div>
+      <p class="muted" style="margin:8px 0 4px">¿No es correcto? Propón el marcador real:</p>
+      ${setInputsHtml}
+      <button class="small secondary" onclick="proponerResultado('${id}', ${JSON.stringify(m).replace(/"/g,'&quot;')}, leerSets('${id}'))">Proponer otro resultado</button>`;
+    }
+    return h;
+  }
+  return `${setInputsHtml}<button class="small" onclick="proponerResultado('${id}', ${JSON.stringify(m).replace(/"/g,'&quot;')}, leerSets('${id}'))">Proponer resultado</button>`;
+}
+
 function renderHistorial(){
   let h='';
   if(isAdmin){
-    h += `<div class="card"><h2 style="margin-top:0">Gestión de jugadores</h2><table><tr><th>Nombre</th><th></th></tr>`;
+    h += `<div class="card"><h2 style="margin-top:0">Gestión de jugadores</h2><table><tr><th>Nombre</th><th>Lado</th><th></th></tr>`;
     Object.entries(players).forEach(([id,p])=>{
-      h += `<tr><td><input type="text" id="rename_${id}" value="${esc(p.name)}" style="max-width:160px"></td>
+      const lado=p.side||'indiferente';
+      h += `<tr><td><input type="text" id="rename_${id}" value="${esc(p.name)}" style="max-width:110px"></td>
+        <td><select id="lado_${id}" style="max-width:100px">
+          <option value="indiferente" ${lado==='indiferente'?'selected':''}>Indif.</option>
+          <option value="derecha" ${lado==='derecha'?'selected':''}>Derecha</option>
+          <option value="reves" ${lado==='reves'?'selected':''}>Revés</option>
+        </select></td>
         <td><div class="row">
-          <button class="small secondary" onclick="renombrarJugador('${id}', document.getElementById('rename_${id}').value)">Guardar</button>
+          <button class="small secondary" onclick="renombrarJugador('${id}', document.getElementById('rename_${id}').value, document.getElementById('lado_${id}').value)">Guardar</button>
           <button class="small secondary" style="border-color:var(--danger);color:var(--danger)" onclick="eliminarJugador('${id}')">Eliminar</button>
         </div></td></tr>`;
     });
@@ -547,7 +623,7 @@ function renderHistorial(){
         let cur=-1;
         ms.forEach(m=>{
           if(m.round!==cur){ cur=m.round; h+=`<p class="muted" style="margin:10px 0 2px">Ronda ${cur+1}</p>`; }
-          const res = m.played ? `${m.result.setsA}-${m.result.setsB} · gana ${esc(teamName(m.result.winner))}` : 'pendiente';
+          const res = m.played ? `${setsTxt(m.result)} · gana ${esc(teamName(m.result.winner))}` : (m.pendingResult?'resultado por confirmar':'pendiente');
           h += `<p style="margin:2px 0">${teamAvatar(m.teamA)}${esc(teamName(m.teamA))} vs ${teamAvatar(m.teamB)}${esc(teamName(m.teamB))} — ${res}</p>`;
         });
       } else { h += `<p class="muted">Sin partidos todavía.</p>`; }
@@ -568,8 +644,7 @@ function renderMisPartidos(){
     const gane=m.result.winner===miId;
     if(gane) g++; else p++;
     const lg=leagues[m.leagueId];
-    const marcador=ladoA?`${m.result.setsA}-${m.result.setsB}`:`${m.result.setsB}-${m.result.setsA}`;
-    return {liga: lg?lg.name:'—', modo: lg?(lg.mode==='torneo'?'Torneo':'Liga'):'', rivalId, gane, marcador};
+    return {liga: lg?lg.name:'—', modo: lg?(lg.mode==='torneo'?'Torneo':'Liga'):'', rivalId, gane, marcador: setsTxt(m.result)};
   });
   let h=`<div class="card"><h2 style="margin-top:0">Tu historial</h2><p style="font-size:16px;margin:0"><b style="color:var(--accent)">${g}</b> ganados · <b style="color:var(--danger)">${p}</b> perdidos</p><p class="muted" style="margin:4px 0 0">${rows.length} partidos jugados en total</p></div>`;
   if(rows.length===0){ h+='<div class="card muted">Todavía no has jugado ningún partido.</div>'; return h; }
@@ -697,10 +772,17 @@ function renderCompeticion(modo){
   }
 
   if(!myId){
-    html += `<p class="muted">Pon tu nombre para entrar (sin contraseña, solo para identificarte).</p>
+    html += `<p class="muted">Pon tu nombre para entrar (sin contraseña, solo para identificarte) y elige tu lado preferido.</p>
     <div class="card">
       <div class="row"><input type="text" id="loginInput" placeholder="Tu nombre"></div>
-      <div style="margin-top:8px"><button onclick="entrarConNombre(document.getElementById('loginInput').value)">Entrar</button></div>
+      <div class="row" style="margin-top:8px">
+        <select id="ladoInput">
+          <option value="indiferente">Indiferente</option>
+          <option value="derecha">Derecha</option>
+          <option value="reves">Revés</option>
+        </select>
+      </div>
+      <div style="margin-top:8px"><button onclick="entrarConNombre(document.getElementById('loginInput').value, document.getElementById('ladoInput').value)">Entrar</button></div>
     </div>`;
     return html;
   }
@@ -712,7 +794,6 @@ function renderCompeticion(modo){
     return html;
   }
 
-  // ---- Formato random: apuntarse / clasificación individual / pareja de la ronda ----
   if(esRandom){
     const apuntado=(lg.participants||[]).includes(myId);
     if(lg.phase==='registration'){
@@ -723,18 +804,17 @@ function renderCompeticion(modo){
       </div>`;
       return html;
     }
-    const myTid = myTeamIdInRound(lid, lg.currentRound);
     html += `<h2>Clasificación individual</h2><div class="card"><table><tr><th>Jugador</th><th>PJ</th><th>G</th><th>P</th><th>Sets</th><th>Dif</th></tr>`;
     standingsPlayers(lid).forEach(r=>{ html += `<tr><td>${esc(r.name)}${r.id===myId?' <span class="badge ok">tú</span>':''}</td><td>${r.pj}</td><td>${r.pg}</td><td>${r.pp}</td><td>${r.sf}-${r.sc}</td><td>${r.dif>0?'+':''}${r.dif}</td></tr>`; });
     html += `</table></div>`;
     html += `<h2>Jornada ${lg.currentRound+1} de ${lg.totalRounds}</h2>`;
-    if(!myTid){
-      const byeHere=(lg.schedule[lg.currentRound].bye||[]).includes(myId);
-      if(byeHere) html += `<div class="card muted">Esta jornada descansas.</div>`;
+    const myTidPrev = myTeamIdInRound(lid, lg.currentRound);
+    if(!myTidPrev && (lg.schedule[lg.currentRound].bye||[]).includes(myId)){
+      html += `<div class="card muted">Esta jornada descansas.</div>`;
     }
   } else {
-    const myTid = myTeamIdIn(lid);
-    if(!myTid){
+    const myTid0 = myTeamIdIn(lid);
+    if(!myTid0){
       const open=teamsOfLeague(lid).filter(([id,t])=>t.players.length<2);
       html += `<p class="muted">Hola ${esc(me.name)}. Crea un equipo o únete a uno existente en "${esc(lg.name)}".</p>
       <div class="card">
@@ -753,13 +833,13 @@ function renderCompeticion(modo){
       return html;
     }
     if(lg.phase==='registration'){
-      html += `<div class="card">${teamPhotoEditor(myTid)}<p class="muted">Esperando a que el admin lance "${esc(lg.name)}". Tu equipo: <b>${esc(teamName(myTid))}</b></p>
-        <button class="small secondary" onclick="salirDeEquipo('${myTid}')">Cambiar de equipo</button></div>`;
+      html += `<div class="card">${teamPhotoEditor(myTid0)}<p class="muted">Esperando a que el admin lance "${esc(lg.name)}". Tu equipo: <b>${esc(teamName(myTid0))}</b></p>
+        <button class="small secondary" onclick="salirDeEquipo('${myTid0}')">Cambiar de equipo</button></div>`;
       return html;
     }
-    html += `<div class="card">${teamPhotoEditor(myTid)}</div>`;
+    html += `<div class="card">${teamPhotoEditor(myTid0)}</div>`;
     html += `<h2>Clasificación</h2><div class="card"><table><tr><th>Equipo</th><th>PJ</th><th>G</th><th>P</th><th>Sets</th><th>Dif</th></tr>`;
-    standingsFor(lid).forEach(r=>{ html += `<tr><td>${teamAvatar(r.id)}${esc(r.name)}${r.id===myTid?' <span class="badge ok">tú</span>':''}</td><td>${r.pj}</td><td>${r.pg}</td><td>${r.pp}</td><td>${r.sf}-${r.sc}</td><td>${r.dif>0?'+':''}${r.dif}</td></tr>`; });
+    standingsFor(lid).forEach(r=>{ html += `<tr><td>${teamAvatar(r.id)}${esc(r.name)}${r.id===myTid0?' <span class="badge ok">tú</span>':''}</td><td>${r.pj}</td><td>${r.pg}</td><td>${r.pp}</td><td>${r.sf}-${r.sc}</td><td>${r.dif>0?'+':''}${r.dif}</td></tr>`; });
     html += `</table></div>`;
     html += `<h2>Ronda ${lg.currentRound+1} de ${lg.totalRounds}</h2>`;
   }
@@ -773,16 +853,12 @@ function renderCompeticion(modo){
     html += `<div class="card match ${mine?'mine':''}">
       <div class="row" style="justify-content:space-between">
         <div><span class="vteam">${teamAvatar(m.teamA)}${esc(teamName(m.teamA))}</span><span class="vs">vs</span><span class="vteam">${teamAvatar(m.teamB)}${esc(teamName(m.teamB))}</span></div>
-        ${m.played?'<span class="badge ok">Jugado</span>': esTorneo?'<span class="badge warn">Por jugar</span>': (m.confirmed?'<span class="badge ok">Fecha confirmada</span>': m.proposal?'<span class="badge warn">Pendiente de votos</span>':'<span class="badge">Sin fecha</span>')}
+        ${m.played?'<span class="badge ok">Jugado</span>': m.pendingResult?'<span class="badge warn">Resultado por confirmar</span>': esTorneo?'<span class="badge warn">Por jugar</span>': (m.confirmed?'<span class="badge ok">Fecha confirmada</span>': m.proposal?'<span class="badge warn">Pendiente de votos</span>':'<span class="badge">Sin fecha</span>')}
       </div>`;
     if(m.played){
-      html += `<p class="muted">Resultado: ${m.result.setsA} - ${m.result.setsB} · Ganador: ${esc(teamName(m.result.winner))}</p>`;
+      html += `<p class="muted">Resultado: ${setsTxt(m.result)} · Ganador: ${esc(teamName(m.result.winner))}</p>`;
     } else if(mine && esTorneo){
-      html += `<div class="row" style="margin-top:8px">
-        <input type="number" id="sa_${id}" placeholder="Sets ${esc(teamName(m.teamA))}" style="max-width:110px">
-        <input type="number" id="sb_${id}" placeholder="Sets ${esc(teamName(m.teamB))}" style="max-width:110px">
-        <button class="small" onclick="guardarResultado('${id}', ${JSON.stringify(m).replace(/"/g,'&quot;')}, document.getElementById('sa_${id}').value, document.getElementById('sb_${id}').value)">Guardar resultado</button>
-      </div>`;
+      html += matchResultBlock(id, m, myTid);
     } else if(mine && !esTorneo){
       if(!m.proposal){
         html += `<div class="row" style="margin-top:8px">
@@ -802,14 +878,9 @@ function renderCompeticion(modo){
             <button class="small" onclick="proponerFecha('${id}', document.getElementById('d2_${id}').value, document.getElementById('h2_${id}').value)">Reproponer</button>
           </div></div>`;
       } else {
-        html += `<p>Fecha: <b>${m.proposal.date} ${m.proposal.time}</b></p>
-          <div class="row" style="margin-top:8px">
-            <input type="number" id="sa_${id}" placeholder="Sets ${esc(teamName(m.teamA))}" style="max-width:110px">
-            <input type="number" id="sb_${id}" placeholder="Sets ${esc(teamName(m.teamB))}" style="max-width:110px">
-            <button class="small" onclick="guardarResultado('${id}', ${JSON.stringify(m).replace(/"/g,'&quot;')}, document.getElementById('sa_${id}').value, document.getElementById('sb_${id}').value)">Guardar resultado</button>
-          </div>`;
+        html += matchResultBlock(id, m, myTid);
       }
-    } else if(!esTorneo && m.proposal){
+    } else if(!esTorneo && m.proposal && !m.confirmed){
       html += `<p class="muted">Fecha propuesta: ${m.proposal.date} ${m.proposal.time}</p>`;
     }
     if(isAdmin){
@@ -827,7 +898,15 @@ function renderCompeticion(modo){
 function render(){
   const app=document.getElementById('app');
   let html = '';
-  if(myId) html += `<p class="muted" style="margin:14px 0 14px">Conectado como <b>${esc(localStorage.getItem('padel_myname')||myId)}</b> · <a href="#" onclick="cerrarSesion();return false;" style="color:var(--muted)">cambiar</a></p>`;
+  if(myId){
+    const myLado = (players[myId]&&players[myId].side) || 'indiferente';
+    html += `<p class="muted" style="margin:14px 0 14px">Conectado como <b>${esc(localStorage.getItem('padel_myname')||myId)}</b> · <a href="#" onclick="cerrarSesion();return false;" style="color:var(--muted)">cambiar</a>
+      · Lado: <select onchange="actualizarLado(this.value)" style="display:inline-block;width:auto;padding:2px 6px;font-size:12px">
+        <option value="indiferente" ${myLado==='indiferente'?'selected':''}>Indiferente</option>
+        <option value="derecha" ${myLado==='derecha'?'selected':''}>Derecha</option>
+        <option value="reves" ${myLado==='reves'?'selected':''}>Revés</option>
+      </select></p>`;
+  }
   if(lastError) html += `<div class="card" style="border-color:var(--danger);color:var(--danger)">⚠️ ${esc(lastError)}</div>`;
   renderAdminCorner();
   if(!allLoaded()){ html += '<div class="loading">Cargando… (mira el panel verde de abajo para ver en qué paso se queda)</div>'; app.innerHTML=html; return; }
@@ -847,14 +926,15 @@ function render(){
 
 window.entrarConNombre=entrarConNombre; window.cerrarSesion=cerrarSesion; window.crearEquipo=crearEquipo; window.unirseEquipo=unirseEquipo;
 window.adminLogin=adminLogin; window.lanzarCompeticion=lanzarCompeticion; window.proponerFecha=proponerFecha;
-window.votarOk=votarOk; window.guardarResultado=guardarResultado; window.crearCompeticion=crearCompeticion;
+window.votarOk=votarOk; window.crearCompeticion=crearCompeticion;
 window.eliminarCompeticion=eliminarCompeticion; window.eliminarEquipo=eliminarEquipo; window.reiniciarPartido=reiniciarPartido;
 window.retrocederRonda=retrocederRonda; window.cambiarTab=cambiarTab; window.toggleHistorial=toggleHistorial; window.toggleDebug=toggleDebug;
 window.salirAdmin=salirAdmin; window.subirFotoEquipo=subirFotoEquipo; window.agregarPartidoManual=agregarPartidoManual; window.eliminarPartido=eliminarPartido;
 window.renombrarJugador=renombrarJugador; window.eliminarJugador=eliminarJugador;
 window.salirDeEquipo=salirDeEquipo; window.renombrarEquipo=renombrarEquipo; window.quitarJugadorDeEquipo=quitarJugadorDeEquipo;
 window.pickLeague=pickLeague; window.apuntarseLigaRandom=apuntarseLigaRandom; window.salirLigaRandom=salirLigaRandom;
-window.quitarParticipante=quitarParticipante;
+window.quitarParticipante=quitarParticipante; window.actualizarLado=actualizarLado;
+window.leerSets=leerSets; window.proponerResultado=proponerResultado; window.confirmarResultado=confirmarResultado;
 </script>
 </body>
 </html>
