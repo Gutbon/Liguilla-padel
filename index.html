@@ -50,16 +50,17 @@ td,th{padding:6px 4px;border-bottom:1px solid var(--border);text-align:left}
 .tabbtn.on{background:var(--accent);color:var(--ink);border-color:var(--accent)}
 .avatar{width:22px;height:22px;border-radius:50%;object-fit:cover;vertical-align:middle;margin-right:5px}
 .avatarBig{width:48px;height:48px;border-radius:50%;object-fit:cover;vertical-align:middle;margin-right:8px}
-#banner{background:#C8102E;padding-top:env(safe-area-inset-top,0px);overflow:hidden}
-#banner img{width:100%;height:auto;display:block}
-#adminCorner{position:fixed;top:calc(env(safe-area-inset-top,0px) + 54px);right:10px;z-index:950}
+#banner{background:#C8102E;padding:10px 16px;padding-top:calc(10px + env(safe-area-inset-top,0px));display:flex;align-items:center}
+#banner img{height:48px;width:auto;display:block}
+#adminCorner{position:fixed;bottom:calc(env(safe-area-inset-bottom,0px) + 14px);right:14px;z-index:10001}
+#adminCorner button{box-shadow:0 2px 8px rgba(0,0,0,.25)}
 #debugPanel{display:none;position:fixed;bottom:0;left:0;right:0;max-height:40vh;overflow-y:auto;background:#0b0b0d;color:#9ef29e;font:11px/1.5 monospace;padding:8px 10px;border-top:2px solid var(--accent);z-index:9999}
 #debugPanel .err{color:#ff8a8a}
 #debugPanel b{color:#fff}
 </style>
 </head>
 <body>
-<div id="banner"><img src="og-image.png" alt="P.O.L.L.A.S. — Padel Organizer for Leagues, Ladders, Activities & Socials"></div>
+<div id="banner"><img src="logo-header.png" alt="P.O.L.L.A.S. — Padel Organizer for Leagues, Ladders, Activities & Socials"></div>
 <div class="wrap" id="app"><div class="loading">Cargando…</div></div>
 <div id="adminCorner"></div>
 <div id="debugPanel"><b>🔧 Panel de depuración</b> <span id="debugLog"></span></div>
