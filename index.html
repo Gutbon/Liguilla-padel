@@ -50,7 +50,8 @@ td,th{padding:6px 4px;border-bottom:1px solid var(--border);text-align:left}
 .tabbtn.on{background:var(--accent);color:var(--ink);border-color:var(--accent)}
 .avatar{width:22px;height:22px;border-radius:50%;object-fit:cover;vertical-align:middle;margin-right:5px}
 .avatarBig{width:48px;height:48px;border-radius:50%;object-fit:cover;vertical-align:middle;margin-right:8px}
-#banner{background:#C8102E;color:#fff;text-align:center;font-weight:700;padding:14px 16px;padding-top:calc(14px + env(safe-area-inset-top,0px));font-size:14px;letter-spacing:.2px}
+#banner{background:#C8102E;padding-top:env(safe-area-inset-top,0px);overflow:hidden}
+#banner img{width:100%;height:auto;display:block}
 #adminCorner{position:fixed;top:calc(env(safe-area-inset-top,0px) + 54px);right:10px;z-index:950}
 #debugPanel{display:none;position:fixed;bottom:0;left:0;right:0;max-height:40vh;overflow-y:auto;background:#0b0b0d;color:#9ef29e;font:11px/1.5 monospace;padding:8px 10px;border-top:2px solid var(--accent);z-index:9999}
 #debugPanel .err{color:#ff8a8a}
@@ -58,7 +59,7 @@ td,th{padding:6px 4px;border-bottom:1px solid var(--border);text-align:left}
 </style>
 </head>
 <body>
-<div id="banner">Padel Organizer for Leagues, Ladders, Activities &amp; Socials</div>
+<div id="banner"><img src="og-image.png" alt="P.O.L.L.A.S. — Padel Organizer for Leagues, Ladders, Activities & Socials"></div>
 <div class="wrap" id="app"><div class="loading">Cargando…</div></div>
 <div id="adminCorner"></div>
 <div id="debugPanel"><b>🔧 Panel de depuración</b> <span id="debugLog"></span></div>
@@ -740,8 +741,12 @@ function renderCompeticion(modo){
     teamsOfLeague(lid).forEach(([id,t])=>{
       const jugadoresHtml = t.players.map(pid=>{
         const nm = players[pid] ? esc(players[pid].name) : 'Jugador Desconocido';
-        return `${nm} <a href="#" onclick="quitarJugadorDeEquipo('${id}','${pid}');return false;" style="color:var(--danger)" title="Quitar del equipo">✕</a>`;
-      }).join(', ') || '—';
+        return `<span class="row" style="display:inline-flex;gap:4px;align-items:center;margin:2px 6px 2px 0">
+          <input type="text" id="pname_${id}_${pid}" value="${nm}" style="max-width:110px;padding:4px 6px">
+          <button class="small secondary" onclick="renombrarJugador('${pid}', document.getElementById('pname_${id}_${pid}').value)">✓</button>
+          <a href="#" onclick="quitarJugadorDeEquipo('${id}','${pid}');return false;" style="color:var(--danger)" title="Quitar del equipo">✕</a>
+        </span>`;
+      }).join('') || '—';
       html += `<div style="border-top:1px solid var(--border);padding:10px 0">
         <div class="row" style="justify-content:space-between">
           <div class="row" style="flex:1 1 auto">
@@ -764,7 +769,13 @@ function renderCompeticion(modo){
     if(parts.length===0) html += `<p class="muted">Nadie apuntado todavía.</p>`;
     parts.forEach(pid=>{
       const nm = players[pid]?esc(players[pid].name):'Jugador Desconocido';
-      html += `<div class="row" style="justify-content:space-between;margin-bottom:4px"><span>${nm}</span>${lg.phase==='registration'?`<button class="small secondary" style="border-color:var(--danger);color:var(--danger)" onclick="quitarParticipante('${lid}','${pid}')">Quitar</button>`:''}</div>`;
+      html += `<div class="row" style="justify-content:space-between;margin-bottom:4px">
+        <div class="row" style="flex:1 1 auto">
+          <input type="text" id="pname_${pid}" value="${nm}" style="max-width:140px">
+          <button class="small secondary" onclick="renombrarJugador('${pid}', document.getElementById('pname_${pid}').value)">Guardar</button>
+        </div>
+        ${lg.phase==='registration'?`<button class="small secondary" style="border-color:var(--danger);color:var(--danger)" onclick="quitarParticipante('${lid}','${pid}')">Quitar</button>`:''}
+      </div>`;
     });
     html += `<div style="margin-top:14px;border-top:1px solid var(--border);padding-top:10px">
       <button class="secondary" style="border-color:var(--danger);color:var(--danger)" onclick="eliminarCompeticion('${modo}','${lid}')">Eliminar est${modo==='liga'?'a liga':'e torneo'}</button>
