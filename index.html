@@ -108,7 +108,7 @@ __log('Firebase inicializado. Iniciando sesión anónima…');
 let myId=localStorage.getItem('padel_myid'), isAdmin=false;
 let players={}, teams={}, matches={}, leagues={};
 let selectedLeagueId={liga:localStorage.getItem('padel_sel_liga')||null, torneo:localStorage.getItem('padel_sel_torneo')||null};
-let tab='liga', historialAbierto=null;
+let tab='liga', historialAbierto=null, statsAbierto=null;
 let loaded={players:false,teams:false,matches:false,leagues:false};
 let lastError=null;
 
@@ -180,7 +180,38 @@ function myTeamIdIn(lid){ const f=teamsOfLeague(lid).find(([id,t])=>t.players.in
 function myTeamIdInRound(lid, round){ const f=teamsOfLeague(lid).find(([id,t])=>t.round===round && t.players.includes(myId)); return f?f[0]:null; }
 function teamName(id){ return id && teams[id] ? teams[id].name : '—'; }
 function teamAvatar(id){ const t=id&&teams[id]; return (t&&t.photo) ? `<img class="avatar" src="${t.photo}">` : ''; }
-function setsTxt(result){ return (result.sets&&result.sets.length) ? result.sets.map(s=>s.a+'-'+s.b).join(', ') : `${result.setsA} - ${result.setsB}`; }
+function setsTxt(result){ if(result.bye) return 'Bye'; return (result.sets&&result.sets.length) ? result.sets.map(s=>s.a+'-'+s.b).join(', ') : `${result.setsA} - ${result.setsB}`; }
+function statsForPlayer(pid){
+  const misEquipos=new Set(Object.entries(teams).filter(([id,t])=>t.players.includes(pid)).map(([id])=>id));
+  const propios=Object.values(matches).filter(m=>m.played && (misEquipos.has(m.teamA)||misEquipos.has(m.teamB)));
+  let g=0,p=0;
+  const rows=propios.map(m=>{
+    const ladoA=misEquipos.has(m.teamA);
+    const miId=ladoA?m.teamA:m.teamB, rivalId=ladoA?m.teamB:m.teamA;
+    const gane=m.result.winner===miId;
+    if(gane) g++; else p++;
+    const lg=leagues[m.leagueId];
+    return {liga: lg?lg.name:'—', modo: lg?(lg.mode==='torneo'?'Torneo':'Liga'):'', rivalId, gane, marcador: setsTxt(m.result)};
+  });
+  return {g,p,rows};
+}
+function setInputsHtml(id){
+  return `<div style="margin-top:8px">`+[1,2,3].map(n=>
+    `<div class="row" style="margin-bottom:4px"><span class="muted" style="width:46px">Set ${n}</span><input type="number" id="s${n}a_${id}" style="max-width:70px"><span class="muted">-</span><input type="number" id="s${n}b_${id}" style="max-width:70px"></div>`
+  ).join('')+`</div>`;
+}
+// Criterios de clasificación: cada uno es una función de comparación sobre filas
+// {pj,pg,pp,sf,sc,dif,gf,gc,gdif}. Añadir uno nuevo aquí lo deja disponible en el
+// selector de "crear liga/torneo" sin tocar nada más.
+const RANKING_MODES = {
+  partidos: { label:'Por partidos ganados', sort:(a,b)=> b.pg-a.pg || b.dif-a.dif || b.gdif-a.gdif || b.sf-a.sf },
+  sets:     { label:'Por sets totales',      sort:(a,b)=> b.sf-a.sf || b.gf-a.gf || a.gc-b.gc }
+};
+function rankingModeOf(lid){ const lg=leagues[lid]; return (lg && RANKING_MODES[lg.rankingMode]) ? lg.rankingMode : 'partidos'; }
+function ordenarPorRanking(rows, lid){
+  const mode = RANKING_MODES[rankingModeOf(lid)] || RANKING_MODES.partidos;
+  return rows.slice().sort(mode.sort);
+}
 function standingsFor(lid){
   const rows = teamsOfLeague(lid).map(([id,t])=>{
     const played = matchesOfLeague(lid).map(([,m])=>m).filter(m=>m.played&&(m.teamA===id||m.teamB===id));
@@ -192,10 +223,9 @@ function standingsFor(lid){
       sc += soyA?m.result.setsB:m.result.setsA;
       (m.result.sets||[]).forEach(s=>{ gf+= soyA?s.a:s.b; gc+= soyA?s.b:s.a; });
     });
-    return {id, name:t.name, pj:played.length, pg:wins, pp:played.length-wins, sf, sc, dif:sf-sc, gdif:gf-gc};
+    return {id, name:t.name, pj:played.length, pg:wins, pp:played.length-wins, sf, sc, dif:sf-sc, gf, gc, gdif:gf-gc};
   });
-  rows.sort((a,b)=> b.pg-a.pg || b.dif-a.dif || b.gdif-a.gdif || b.sf-a.sf);
-  return rows;
+  return ordenarPorRanking(rows, lid);
 }
 function standingsPlayers(lid){
   const stats={};
@@ -216,8 +246,7 @@ function standingsPlayers(lid){
     });
   });
   const rows=Object.entries(stats).map(([pid,s])=>({id:pid, name: players[pid]?players[pid].name:'Jugador Desconocido', ...s, dif:s.sf-s.sc, gdif:s.gf-s.gc}));
-  rows.sort((a,b)=> b.pg-a.pg || b.dif-a.dif || b.gdif-a.gdif || b.sf-a.sf);
-  return rows;
+  return ordenarPorRanking(rows, lid);
 }
 
 // ---- Login ----
@@ -317,16 +346,17 @@ async function eliminarJugador(id){
 }
 
 // ---- Competiciones ----
-async function crearCompeticion(modo, name, format){
+async function crearCompeticion(modo, name, format, rankingMode){
   if(!isAdmin) return;
   format = format==='random' ? 'random' : 'fijo';
+  rankingMode = RANKING_MODES[rankingMode] ? rankingMode : 'partidos';
   name=(name||'').trim();
   if(!name) name=(modo==='liga'?'Liga ':'Torneo ')+(Object.values(leagues).filter(l=>l.mode===modo).length+1);
   const lid=(modo==='liga'?'lg_':'tn_')+Math.random().toString(36).slice(2,9);
   selectedLeagueId[modo]=lid;
   localStorage.setItem('padel_sel_'+modo, lid);
   try{
-    await setDoc(doc(dbase,"leagues/"+lid), {name, mode:modo, format, phase:'registration', currentRound:0, totalRounds:0, schedule:null, participants:[], createdAt:Date.now()});
+    await setDoc(doc(dbase,"leagues/"+lid), {name, mode:modo, format, rankingMode, phase:'registration', currentRound:0, totalRounds:0, schedule:null, participants:[], createdAt:Date.now()});
   }catch(err){ showError('No se pudo crear',err); }
 }
 async function crearEquipo(lid, name){
@@ -506,6 +536,56 @@ async function confirmarResultado(matchId, m){
     await checkRondaCompleta(m.leagueId);
   }catch(err){ showError('No se pudo confirmar el resultado',err); }
 }
+async function editarResultadoAdmin(matchId, setsInputs){
+  if(!isAdmin) return;
+  const m=matches[matchId]; if(!m) return;
+  const sets=[];
+  for(const {a,b} of setsInputs){
+    if(a===''&&b==='') continue;
+    const na=parseInt(a), nb=parseInt(b);
+    if(isNaN(na)||isNaN(nb)||na===nb){ alert('Revisa los sets: cada set jugado necesita un marcador válido y sin empate.'); return; }
+    sets.push({a:na,b:nb});
+  }
+  if(sets.length===0){ alert('Introduce al menos un set.'); return; }
+  const setsA=sets.filter(s=>s.a>s.b).length, setsB=sets.filter(s=>s.b>s.a).length;
+  if(setsA===setsB){ alert('Está empatado en sets, revisa el marcador.'); return; }
+  const winner = setsA>setsB ? m.teamA : m.teamB;
+  try{
+    await updateDoc(doc(dbase,"matches/"+matchId), {played:true, pendingResult:null, result:{sets, setsA, setsB, winner}});
+    await checkRondaCompleta(m.leagueId);
+  }catch(err){ showError('No se pudo guardar el resultado',err); }
+}
+async function cerrarPorBye(matchId, equipoGanador){
+  if(!isAdmin) return;
+  const m=matches[matchId]; if(!m) return;
+  if(!confirm('¿Cerrar este partido como bye a favor de "'+teamName(equipoGanador)+'"?')) return;
+  try{
+    await updateDoc(doc(dbase,"matches/"+matchId), {played:true, pendingResult:null, result:{sets:[], setsA: equipoGanador===m.teamA?1:0, setsB: equipoGanador===m.teamB?1:0, winner:equipoGanador, bye:true}});
+    await checkRondaCompleta(m.leagueId);
+  }catch(err){ showError('No se pudo cerrar el partido',err); }
+}
+async function adminAnadirJugadorAEquipo(teamId, playerId){
+  if(!isAdmin||!playerId) return;
+  const t=teams[teamId]; if(!t||t.players.length>=2) return;
+  try{ await updateDoc(doc(dbase,"teams/"+teamId), {players:[...t.players, playerId]}); }
+  catch(err){ showError('No se pudo añadir el jugador',err); }
+}
+async function adminCrearEquipoCon(lid, name, p1, p2){
+  if(!isAdmin||!lid) return;
+  name=(name||'').trim(); if(!name) return;
+  const jugadores=[p1,p2].filter(Boolean);
+  if(jugadores.length===0){ alert('Elige al menos un jugador.'); return; }
+  try{
+    const teamId="t_"+Math.random().toString(36).slice(2,9);
+    await setDoc(doc(dbase,"teams/"+teamId), {name, players:jugadores, leagueId:lid});
+  }catch(err){ showError('No se pudo crear el equipo',err); }
+}
+async function adminApuntarJugador(lid, pid){
+  if(!isAdmin||!pid) return;
+  try{ await updateDoc(doc(dbase,"leagues/"+lid), {participants: arrayUnion(pid)}); }
+  catch(err){ showError('No se pudo apuntar al jugador',err); }
+}
+function toggleStats(pid){ statsAbierto = statsAbierto===pid ? null : pid; render(); }
 async function reiniciarPartido(matchId){
   if(!isAdmin) return;
   if(!confirm('¿Reiniciar este partido? Se borra la fecha propuesta, los votos y el resultado.')) return;
@@ -563,9 +643,6 @@ async function eliminarCompeticion(modo, lid){
 }
 
 function matchResultBlock(id, m, myTid){
-  const setInputsHtml = `<div style="margin-top:8px">`+[1,2,3].map(n=>
-    `<div class="row" style="margin-bottom:4px"><span class="muted" style="width:46px">Set ${n}</span><input type="number" id="s${n}a_${id}" style="max-width:70px"><span class="muted">-</span><input type="number" id="s${n}b_${id}" style="max-width:70px"></div>`
-  ).join('')+`</div>`;
   if(m.pendingResult){
     const pr=m.pendingResult;
     const soyProponente = pr.proposedByTeam===myTid;
@@ -576,12 +653,26 @@ function matchResultBlock(id, m, myTid){
     } else {
       h += `<div class="row"><button class="small" onclick="confirmarResultado('${id}', ${JSON.stringify(m).replace(/"/g,'&quot;')})">Confirmar resultado</button></div>
       <p class="muted" style="margin:8px 0 4px">¿No es correcto? Propón el marcador real:</p>
-      ${setInputsHtml}
+      ${setInputsHtml(id)}
       <button class="small secondary" onclick="proponerResultado('${id}', ${JSON.stringify(m).replace(/"/g,'&quot;')}, leerSets('${id}'))">Proponer otro resultado</button>`;
     }
     return h;
   }
-  return `${setInputsHtml}<button class="small" onclick="proponerResultado('${id}', ${JSON.stringify(m).replace(/"/g,'&quot;')}, leerSets('${id}'))">Proponer resultado</button>`;
+  return `${setInputsHtml(id)}<button class="small" onclick="proponerResultado('${id}', ${JSON.stringify(m).replace(/"/g,'&quot;')}, leerSets('${id}'))">Proponer resultado</button>`;
+}
+function renderAdminCierre(id, m){
+  return `<div style="margin-top:8px;border-top:1px dashed var(--border);padding-top:8px">
+    <p class="muted" style="margin:0 0 6px">Cerrar partido (admin) — bye, cancelado, se alargó…:</p>
+    <div class="row">
+      <button class="small secondary" onclick="cerrarPorBye('${id}','${m.teamA}')">Bye ${esc(teamName(m.teamA))}</button>
+      <button class="small secondary" onclick="cerrarPorBye('${id}','${m.teamB}')">Bye ${esc(teamName(m.teamB))}</button>
+      <button class="small secondary" onclick="const b=document.getElementById('manual_${id}'); b.style.display=b.style.display==='block'?'none':'block'">Marcador manual</button>
+    </div>
+    <div id="manual_${id}" style="display:none;margin-top:8px">
+      ${setInputsHtml(id)}
+      <button class="small" onclick="editarResultadoAdmin('${id}', leerSets('${id}'))">Guardar y cerrar</button>
+    </div>
+  </div>`;
 }
 
 function renderHistorial(){
@@ -598,8 +689,20 @@ function renderHistorial(){
         </select></td>
         <td><div class="row">
           <button class="small secondary" onclick="renombrarJugador('${id}', document.getElementById('rename_${id}').value, document.getElementById('lado_${id}').value)">Guardar</button>
+          <button class="small secondary" onclick="toggleStats('${id}')">${statsAbierto===id?'Ocultar':'Stats'}</button>
           <button class="small secondary" style="border-color:var(--danger);color:var(--danger)" onclick="eliminarJugador('${id}')">Eliminar</button>
         </div></td></tr>`;
+      if(statsAbierto===id){
+        const st=statsForPlayer(id);
+        h += `<tr><td colspan="3" style="background:var(--bg)">
+          <p style="margin:6px 0"><b style="color:var(--accent)">${st.g}</b> ganados · <b style="color:var(--danger)">${st.p}</b> perdidos (${st.rows.length} jugados)</p>`;
+        if(st.rows.length){
+          h += `<table><tr><th>Competición</th><th>Rival</th><th>Resultado</th><th></th></tr>`;
+          st.rows.forEach(r=>{ h += `<tr><td>${esc(r.liga)} <span class="badge">${r.modo}</span></td><td>${teamAvatar(r.rivalId)}${esc(teamName(r.rivalId))}</td><td>${r.marcador}</td><td><span class="badge ${r.gane?'ok':'warn'}">${r.gane?'Ganado':'Perdido'}</span></td></tr>`; });
+          h += `</table>`;
+        }
+        h += `</td></tr>`;
+      }
     });
     h += `</table></div>`;
   }
@@ -616,7 +719,7 @@ function renderHistorial(){
       </div>`;
     if(open){
       const rows = lg.format==='random' ? standingsPlayers(lid) : standingsFor(lid);
-      h += `<h2 style="margin:12px 0 8px">Clasificación</h2><table><tr><th>${lg.format==='random'?'Jugador':'Equipo'}</th><th>PJ</th><th>G</th><th>P</th><th>Sets</th><th>Dif</th></tr>`;
+      h += `<h2 style="margin:12px 0 8px">Clasificación</h2><p class="muted" style="margin:-4px 0 8px">${esc(RANKING_MODES[rankingModeOf(lid)].label)}</p><table><tr><th>${lg.format==='random'?'Jugador':'Equipo'}</th><th>PJ</th><th>G</th><th>P</th><th>Sets</th><th>Dif</th></tr>`;
       rows.forEach(r=>{ h+=`<tr><td>${teamAvatar(r.id)}${esc(r.name)}</td><td>${r.pj}</td><td>${r.pg}</td><td>${r.pp}</td><td>${r.sf}-${r.sc}</td><td>${r.dif>0?'+':''}${r.dif}</td></tr>`; });
       h += `</table>`;
       const ms=matchesOfLeague(lid).map(([,m])=>m).sort((a,b)=>a.round-b.round);
@@ -637,17 +740,7 @@ function renderHistorial(){
 
 function renderMisPartidos(){
   if(!myId) return `<div class="card muted">Pon tu nombre en la pestaña Liga o Torneo para ver tu historial personal.</div>`;
-  const misEquipos=new Set(Object.entries(teams).filter(([id,t])=>t.players.includes(myId)).map(([id])=>id));
-  const propios=Object.values(matches).filter(m=>m.played && (misEquipos.has(m.teamA)||misEquipos.has(m.teamB)));
-  let g=0,p=0;
-  const rows=propios.map(m=>{
-    const ladoA=misEquipos.has(m.teamA);
-    const miId=ladoA?m.teamA:m.teamB, rivalId=ladoA?m.teamB:m.teamA;
-    const gane=m.result.winner===miId;
-    if(gane) g++; else p++;
-    const lg=leagues[m.leagueId];
-    return {liga: lg?lg.name:'—', modo: lg?(lg.mode==='torneo'?'Torneo':'Liga'):'', rivalId, gane, marcador: setsTxt(m.result)};
-  });
+  const {g,p,rows} = statsForPlayer(myId);
   let h=`<div class="card"><h2 style="margin-top:0">Tu historial</h2><p style="font-size:16px;margin:0"><b style="color:var(--accent)">${g}</b> ganados · <b style="color:var(--danger)">${p}</b> perdidos</p><p class="muted" style="margin:4px 0 0">${rows.length} partidos jugados en total</p></div>`;
   if(rows.length===0){ h+='<div class="card muted">Todavía no has jugado ningún partido.</div>'; return h; }
   h += `<div class="card"><table><tr><th>Competición</th><th>Rival</th><th>Resultado</th><th></th></tr>`;
@@ -724,7 +817,10 @@ function renderCompeticion(modo){
           <option value="fijo">Equipos fijos</option>
           <option value="random">Parejas rotativas (random)</option>
         </select>
-        <button class="small" onclick="crearCompeticion('${modo}', document.getElementById('compInput2_${modo}').value, document.getElementById('formatoInput_${modo}').value)">Crear</button>
+        <select id="rankingInput_${modo}">
+          ${Object.entries(RANKING_MODES).map(([k,v])=>`<option value="${k}">${esc(v.label)}</option>`).join('')}
+        </select>
+        <button class="small" onclick="crearCompeticion('${modo}', document.getElementById('compInput2_${modo}').value, document.getElementById('formatoInput_${modo}').value, document.getElementById('rankingInput_${modo}').value)">Crear</button>
       </div>
     </div>`;
     const dbgOn=localStorage.getItem('padel_debug')==='1';
@@ -756,10 +852,27 @@ function renderCompeticion(modo){
           </div>
           <button class="small secondary" style="border-color:var(--danger);color:var(--danger)" onclick="eliminarEquipo('${id}')">Eliminar equipo</button>
         </div>
-        <p class="muted" style="margin:6px 0 0">Jugadores: ${jugadoresHtml}</p>
-      </div>`;
+        <p class="muted" style="margin:6px 0 0">Jugadores: ${jugadoresHtml}</p>`;
+      if(t.players.length<2 && sinEquipo.length){
+        html += `<div class="row" style="margin-top:6px">
+          <select id="addp_${id}">${sinEquipo.map(([pid,p])=>`<option value="${pid}">${esc(p.name)}</option>`).join('')}</select>
+          <button class="small" onclick="adminAnadirJugadorAEquipo('${id}', document.getElementById('addp_${id}').value)">Añadir al equipo</button>
+        </div>`;
+      }
+      html += `</div>`;
     });
-    if(sinEquipo.length) html += `<p class="muted" style="margin-top:10px">Sin equipo: ${sinEquipo.map(([id,p])=>esc(p.name)).join(', ')}</p>`;
+    if(sinEquipo.length){
+      html += `<p class="muted" style="margin-top:10px">Sin equipo: ${sinEquipo.map(([id,p])=>esc(p.name)).join(', ')}</p>
+      <div style="margin-top:10px;border-top:1px solid var(--border);padding-top:10px">
+        <p class="muted" style="margin:0 0 6px">Crear equipo con jugadores ya registrados:</p>
+        <div class="row">
+          <input type="text" id="newTeamName_${modo}" placeholder="Nombre del equipo" style="max-width:140px">
+          <select id="newTeamP1_${modo}">${sinEquipo.map(([id,p])=>`<option value="${id}">${esc(p.name)}</option>`).join('')}</select>
+          <select id="newTeamP2_${modo}">${sinEquipo.map(([id,p])=>`<option value="${id}">${esc(p.name)}</option>`).join('')}</select>
+          <button class="small" onclick="adminCrearEquipoCon('${lid}', document.getElementById('newTeamName_${modo}').value, document.getElementById('newTeamP1_${modo}').value, document.getElementById('newTeamP2_${modo}').value)">Crear</button>
+        </div>
+      </div>`;
+    }
     html += `<div style="margin-top:14px;border-top:1px solid var(--border);padding-top:10px">
       <button class="secondary" style="border-color:var(--danger);color:var(--danger)" onclick="eliminarCompeticion('${modo}','${lid}')">Eliminar est${modo==='liga'?'a liga':'e torneo'}</button>
     </div></div>`;
@@ -778,6 +891,13 @@ function renderCompeticion(modo){
         ${lg.phase==='registration'?`<button class="small secondary" style="border-color:var(--danger);color:var(--danger)" onclick="quitarParticipante('${lid}','${pid}')">Quitar</button>`:''}
       </div>`;
     });
+    const noApuntados = Object.entries(players).filter(([id])=>!parts.includes(id));
+    if(lg.phase==='registration' && noApuntados.length){
+      html += `<div class="row" style="margin-top:10px;border-top:1px solid var(--border);padding-top:10px">
+        <select id="addPart_${modo}">${noApuntados.map(([id,p])=>`<option value="${id}">${esc(p.name)}</option>`).join('')}</select>
+        <button class="small" onclick="adminApuntarJugador('${lid}', document.getElementById('addPart_${modo}').value)">Apuntar</button>
+      </div>`;
+    }
     html += `<div style="margin-top:14px;border-top:1px solid var(--border);padding-top:10px">
       <button class="secondary" style="border-color:var(--danger);color:var(--danger)" onclick="eliminarCompeticion('${modo}','${lid}')">Eliminar est${modo==='liga'?'a liga':'e torneo'}</button>
     </div></div>`;
@@ -816,7 +936,7 @@ function renderCompeticion(modo){
       </div>`;
       return html;
     }
-    html += `<h2>Clasificación individual</h2><div class="card"><table><tr><th>Jugador</th><th>PJ</th><th>G</th><th>P</th><th>Sets</th><th>Dif</th></tr>`;
+    html += `<h2>Clasificación individual</h2><p class="muted" style="margin:-6px 0 8px">${esc(RANKING_MODES[rankingModeOf(lid)].label)}</p><div class="card"><table><tr><th>Jugador</th><th>PJ</th><th>G</th><th>P</th><th>Sets</th><th>Dif</th></tr>`;
     standingsPlayers(lid).forEach(r=>{ html += `<tr><td>${esc(r.name)}${r.id===myId?' <span class="badge ok">tú</span>':''}</td><td>${r.pj}</td><td>${r.pg}</td><td>${r.pp}</td><td>${r.sf}-${r.sc}</td><td>${r.dif>0?'+':''}${r.dif}</td></tr>`; });
     html += `</table></div>`;
     html += `<h2>Jornada ${lg.currentRound+1} de ${lg.totalRounds}</h2>`;
@@ -850,7 +970,7 @@ function renderCompeticion(modo){
       return html;
     }
     html += `<div class="card">${teamPhotoEditor(myTid0)}</div>`;
-    html += `<h2>Clasificación</h2><div class="card"><table><tr><th>Equipo</th><th>PJ</th><th>G</th><th>P</th><th>Sets</th><th>Dif</th></tr>`;
+    html += `<h2>Clasificación</h2><p class="muted" style="margin:-6px 0 8px">${esc(RANKING_MODES[rankingModeOf(lid)].label)}</p><div class="card"><table><tr><th>Equipo</th><th>PJ</th><th>G</th><th>P</th><th>Sets</th><th>Dif</th></tr>`;
     standingsFor(lid).forEach(r=>{ html += `<tr><td>${teamAvatar(r.id)}${esc(r.name)}${r.id===myTid0?' <span class="badge ok">tú</span>':''}</td><td>${r.pj}</td><td>${r.pg}</td><td>${r.pp}</td><td>${r.sf}-${r.sc}</td><td>${r.dif>0?'+':''}${r.dif}</td></tr>`; });
     html += `</table></div>`;
     html += `<h2>Ronda ${lg.currentRound+1} de ${lg.totalRounds}</h2>`;
@@ -868,7 +988,18 @@ function renderCompeticion(modo){
         ${m.played?'<span class="badge ok">Jugado</span>': m.pendingResult?'<span class="badge warn">Resultado por confirmar</span>': esTorneo?'<span class="badge warn">Por jugar</span>': (m.confirmed?'<span class="badge ok">Fecha confirmada</span>': m.proposal?'<span class="badge warn">Pendiente de votos</span>':'<span class="badge">Sin fecha</span>')}
       </div>`;
     if(m.played){
-      html += `<p class="muted">Resultado: ${setsTxt(m.result)} · Ganador: ${esc(teamName(m.result.winner))}</p>`;
+      html += m.result.bye
+        ? `<p class="muted">Bye a favor de ${esc(teamName(m.result.winner))}</p>`
+        : `<p class="muted">Resultado: ${setsTxt(m.result)} · Ganador: ${esc(teamName(m.result.winner))}</p>`;
+      if(isAdmin){
+        html += `<div style="margin-top:6px">
+          <button class="small secondary" onclick="const b=document.getElementById('editRes_${id}'); b.style.display=b.style.display==='block'?'none':'block'">Editar resultado (admin)</button>
+          <div id="editRes_${id}" style="display:none;margin-top:8px">
+            ${setInputsHtml(id)}
+            <button class="small" onclick="editarResultadoAdmin('${id}', leerSets('${id}'))">Guardar cambios</button>
+          </div>
+        </div>`;
+      }
     } else if(mine && esTorneo){
       html += matchResultBlock(id, m, myTid);
     } else if(mine && !esTorneo){
@@ -894,6 +1025,9 @@ function renderCompeticion(modo){
       }
     } else if(!esTorneo && m.proposal && !m.confirmed){
       html += `<p class="muted">Fecha propuesta: ${m.proposal.date} ${m.proposal.time}</p>`;
+    }
+    if(isAdmin && !m.played){
+      html += renderAdminCierre(id, m);
     }
     if(isAdmin){
       html += `<div style="margin-top:8px"><button class="small secondary" style="border-color:var(--danger);color:var(--danger)" onclick="reiniciarPartido('${id}')">Reiniciar partido (admin)</button></div>`;
@@ -947,6 +1081,9 @@ window.salirDeEquipo=salirDeEquipo; window.renombrarEquipo=renombrarEquipo; wind
 window.pickLeague=pickLeague; window.apuntarseLigaRandom=apuntarseLigaRandom; window.salirLigaRandom=salirLigaRandom;
 window.quitarParticipante=quitarParticipante; window.actualizarLado=actualizarLado;
 window.leerSets=leerSets; window.proponerResultado=proponerResultado; window.confirmarResultado=confirmarResultado;
+window.editarResultadoAdmin=editarResultadoAdmin; window.cerrarPorBye=cerrarPorBye;
+window.adminAnadirJugadorAEquipo=adminAnadirJugadorAEquipo; window.adminCrearEquipoCon=adminCrearEquipoCon; window.adminApuntarJugador=adminApuntarJugador;
+window.toggleStats=toggleStats;
 </script>
 </body>
 </html>
